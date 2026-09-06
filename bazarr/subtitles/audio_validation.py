@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -111,14 +112,14 @@ def _correlations(audio, subtitle_window):
     return np.divide(numerator, denominator, out=np.zeros_like(numerator), where=denominator > 1e-9)
 
 
-def evaluate_activity(duration, starts, activity, intervals):
-    """Search one global offset/rate, then check independent-window evidence."""
+def evaluate_activity(duration, starts, activity, intervals, search=False):
+    """Validate actual timing; optional offset/rate search is diagnostic only."""
     valid = np.array([0.08 < sample.mean() < 0.92 and sample.std() > 0.12 for sample in activity])
     if valid.sum() < 3:
         return {'accepted': False, 'reason': 'insufficient_speech', 'windows': int(valid.sum())}
     offsets = MAX_OFFSET - np.arange(MAX_OFFSET * HZ * 2 + 1) / HZ
     candidates = []
-    for rate in RATES:
+    for rate in RATES if search else (1.0,):
         length = int(math.ceil((duration + MAX_OFFSET + WINDOW_SECONDS) * HZ)) + 2
         changes = np.zeros(length + 1)
         scaled = np.rint(intervals * rate * HZ).astype(np.int64)
@@ -136,7 +137,7 @@ def evaluate_activity(duration, starts, activity, intervals):
             scores.append(_correlations(audio, window))
         scores = np.array(scores)
         combined = scores.mean(axis=0)
-        best = int(combined.argmax())
+        best = int(combined.argmax()) if search else MAX_OFFSET * HZ
         background = combined[np.abs(offsets - offsets[best]) > 10]
         peak_z = float((combined[best] - background.mean()) / max(background.std(), 0.001))
         candidates.append({'score': float(combined[best]), 'offset_seconds': float(offsets[best]),
@@ -153,6 +154,32 @@ def evaluate_activity(duration, starts, activity, intervals):
     return best
 
 
+def align_subtitle(video_path, text, binary, audio_stream=0):
+    """Synchronize a temporary copy; return content only after successful output."""
+    subtitles = pysubs2.SSAFile.from_string(text)
+    format_ = subtitles.format
+    if format_ not in ('srt', 'ass', 'ssa'):
+        raise ValueError('Unsupported synchronization format')
+    with tempfile.TemporaryDirectory(prefix='bazarr-audio-sync-') as directory:
+        source = Path(directory) / ('input.' + format_)
+        output = Path(directory) / ('aligned.' + format_)
+        source.write_text(text, encoding='utf-8')
+        env = os.environ.copy()
+        # Bazarr adds vendored libraries to sys.path instead of installing them.
+        env['PYTHONPATH'] = os.pathsep.join(str(Path(path).resolve()) for path in sys.path if path)
+        subprocess.run([sys.executable, '-m', 'ffsubsync.ffsubsync', str(video_path),
+                        '-i', str(source), '-o', str(output), '--vad', 'webrtc',
+                        '--reference-stream', '0:a:%d' % audio_stream,
+                        '--max-offset-seconds', str(MAX_OFFSET), '--encoding', 'utf-8',
+                        '--output-encoding', 'utf-8', '--ffmpeg-path', str(Path(binary('ffmpeg')).parent)],
+                       env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       check=True, timeout=300,
+                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        if output.stat().st_size > 2_000_000:
+            raise ValueError('Excessive synchronized subtitle content')
+        return output.read_text(encoding='utf-8-sig')
+
+
 def validate_download(video, subtitle):
     from app.config import settings
     if not settings.audio_validation.enabled:
@@ -160,13 +187,29 @@ def validate_download(video, subtitle):
     try:
         from app.get_args import args
         from utilities.binaries import get_binary
-        intervals = parse_intervals(subtitle.text)
+        subtitle.audio_timing_validated = False
+        text = subtitle.text
+        intervals = parse_intervals(text)
         duration, starts, activity = extract_activity(
             video.original_path, os.path.join(args.config_dir, 'cache', 'audio-validation'),
             get_binary, settings.audio_validation.audio_stream)
         result = evaluate_activity(duration, starts, activity, intervals)
-        logging.info('BAZARR Audio timing validation for %s: %s', video.original_path, json.dumps(result))
-        return result['accepted']
+        logging.info('BAZARR Audio timing validation before sync for %s: %s', video.original_path, json.dumps(result))
+        if result['accepted']:
+            subtitle.audio_timing_validated = True
+            return True
+        if result['reason'] == 'insufficient_speech':
+            return False
+        aligned = align_subtitle(video.original_path, text, get_binary, settings.audio_validation.audio_stream)
+        result = evaluate_activity(duration, starts, activity, parse_intervals(aligned))
+        logging.info('BAZARR Audio timing validation after sync for %s: %s', video.original_path, json.dumps(result))
+        if not result['accepted']:
+            return False
+        # Commit corrected content only after validation; rejected originals never reach saving.
+        subtitle.content = aligned.encode('utf-8')
+        subtitle.encoding = subtitle._guessed_encoding = 'utf-8'
+        subtitle.audio_timing_validated = True
+        return True
     except Exception as error:
         logging.warning('BAZARR Audio timing validation unavailable (%s); subtitle not saved', type(error).__name__)
         return False

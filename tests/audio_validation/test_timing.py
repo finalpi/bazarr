@@ -40,10 +40,86 @@ def media():
 @pytest.mark.parametrize('offset,rate', [(0, 1), (35, 1), (-45, 1), (10, 25 / 24)])
 def test_accepts_offset_and_speed_variations(media, offset, rate):
     duration, starts, audio, intervals = media
-    result = timing.evaluate_activity(duration, starts, audio, (intervals - offset) / rate)
+    result = timing.evaluate_activity(duration, starts, audio, (intervals - offset) / rate, search=True)
     assert result['accepted']
     assert abs(result['offset_seconds'] - offset) < 0.5
     assert result['rate'] == pytest.approx(rate)
+
+
+@pytest.mark.parametrize('offset,rate', [(35, 1), (-45, 1), (10, 25 / 24)])
+def test_actual_timing_rejects_unapplied_corrections(media, offset, rate):
+    duration, starts, audio, intervals = media
+    assert not timing.evaluate_activity(duration, starts, audio, (intervals - offset) / rate)['accepted']
+
+
+@pytest.mark.parametrize('initial_pass,aligned_pass', [(True, True), (False, True), (False, False)])
+def test_validate_then_sync_then_validate(monkeypatch, initial_pass, aligned_pass):
+    monkeypatch.setitem(sys.modules, 'app.config', SimpleNamespace(
+        settings=SimpleNamespace(audio_validation=SimpleNamespace(enabled=True, audio_stream=0))))
+    monkeypatch.setitem(sys.modules, 'app.get_args', SimpleNamespace(args=SimpleNamespace(config_dir='unused')))
+    monkeypatch.setitem(sys.modules, 'utilities.binaries', SimpleNamespace(get_binary=str))
+    monkeypatch.setattr(timing, 'parse_intervals', lambda text: text)
+    monkeypatch.setattr(timing, 'extract_activity', lambda *args: (2400, [], []))
+    calls = []
+    def evaluate(*args):
+        calls.append(args[-1])
+        return {'accepted': initial_pass if len(calls) == 1 else aligned_pass, 'reason': 'timing_not_confirmed'}
+    monkeypatch.setattr(timing, 'evaluate_activity', evaluate)
+    def align(*args):
+        assert not initial_pass
+        return 'corrected'
+    monkeypatch.setattr(timing, 'align_subtitle', align)
+    subtitle = SimpleNamespace(text='original', content=b'original', encoding='gbk', _guessed_encoding='gbk')
+    assert timing.validate_download(SimpleNamespace(original_path='video'), subtitle) == (initial_pass or aligned_pass)
+    assert calls == (['original'] if initial_pass else ['original', 'corrected'])
+    assert subtitle.content == (b'corrected' if not initial_pass and aligned_pass else b'original')
+    assert subtitle.audio_timing_validated == (initial_pass or aligned_pass)
+    if not initial_pass and aligned_pass:
+        assert subtitle.encoding == subtitle._guessed_encoding == 'utf-8'
+
+
+def test_sync_failure_leaves_original_and_cleans_temporary_files(monkeypatch):
+    import subprocess
+    paths = []
+    def fail(command, **kwargs):
+        source = Path(command[command.index('-i') + 1])
+        paths.append(source)
+        assert source.exists()
+        assert kwargs['timeout'] == 300
+        raise subprocess.TimeoutExpired(command, 300)
+    monkeypatch.setattr(timing.subprocess, 'run', fail)
+    with pytest.raises(subprocess.TimeoutExpired):
+        timing.align_subtitle('video', '1\n00:00:01,000 --> 00:00:02,000\nTest\n', str)
+    assert paths and not paths[0].parent.exists()
+
+
+def test_validated_download_skips_later_movie_and_episode_sync():
+    tree = ast.parse((ROOT / 'bazarr/subtitles/processing.py').read_text(encoding='utf-8'))
+    guards = [node.test for node in ast.walk(tree) if isinstance(node, ast.If)
+              and 'audio_timing_validated' in ast.unparse(node.test)]
+    assert len(guards) == 2
+    for guard in guards:
+        code = compile(ast.Expression(guard), '<sync-guard>', 'eval')
+        assert not eval(code, {'subtitle': SimpleNamespace(audio_timing_validated=True),
+                               'sync_checker': lambda _: pytest.fail('Must skip repeat sync')})
+        assert eval(code, {'subtitle': SimpleNamespace(), 'sync_checker': lambda _: True})
+
+
+def test_sync_error_rejects_without_mutating_candidate(monkeypatch):
+    monkeypatch.setitem(sys.modules, 'app.config', SimpleNamespace(
+        settings=SimpleNamespace(audio_validation=SimpleNamespace(enabled=True, audio_stream=0))))
+    monkeypatch.setitem(sys.modules, 'app.get_args', SimpleNamespace(args=SimpleNamespace(config_dir='unused')))
+    monkeypatch.setitem(sys.modules, 'utilities.binaries', SimpleNamespace(get_binary=str))
+    monkeypatch.setattr(timing, 'parse_intervals', lambda _: [])
+    monkeypatch.setattr(timing, 'extract_activity', lambda *args: (2400, [], []))
+    monkeypatch.setattr(timing, 'evaluate_activity', lambda *args: {'accepted': False, 'reason': 'timing_not_confirmed'})
+    def fail(*args):
+        raise TimeoutError()
+    monkeypatch.setattr(timing, 'align_subtitle', fail)
+    subtitle = SimpleNamespace(text='original', content=b'original')
+    assert not timing.validate_download(SimpleNamespace(original_path='video'), subtitle)
+    assert subtitle.content == b'original'
+    assert not subtitle.audio_timing_validated
 
 
 def test_rejects_unrelated_speech_and_empty_audio(media):

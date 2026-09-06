@@ -1,10 +1,38 @@
 # Audio Timing Benchmark (2026-09-06)
 
+These are historical results for the original offset-search filter, not the
+current validate/synchronize/revalidate pipeline. S01E22 SRT and ASS were later
+manually reported to have incorrect timing: correct show content did not imply
+correct alignment. See the pipeline regression section below.
+
 Measurements were made inside the user's existing Bazarr Docker container on a
 Mac, reading videos over its existing NFS mounts. No media files were changed by
 these benchmarks. Reports contain filenames and scores only, not subtitle dialogue.
 
 ## Calibration
+
+### Pipeline Regression (2026-09-07)
+
+The new pipeline checks zero offset/rate 1 first, runs ffsubsync only on failure,
+then checks the corrected timeline with the unchanged correlation thresholds.
+`scripts/benchmark_audio_alignment.py` exercised real Subtitle objects and the
+production save function in an isolated output directory on the Mac:
+
+- S01E22 ASS: corrected, accepted, saved timing verified.
+- S01E22 SRT: corrected candidate still rejected.
+- S01E03 ASS: corrected, accepted, saved timing verified.
+- S01E01 known wrong-show subtitle against E22: rejected after attempted sync.
+- S01E03 subtitle against E22 (wrong episode): rejected after attempted sync.
+- Both accepted outputs passed a second validation without invoking sync.
+- Original media-library subtitle files remained unchanged.
+
+The preceding isolated E22 experiment also checked a second set of five audio
+windows: corrected ASS passed both sets, while corrected SRT failed both.
+These small regressions are not a universal accuracy estimate. The unit suite
+contains 24 tests, including fixed-time rejection, conditional sync, timeout
+cleanup, no mutation on failure, and suppression of later duplicate auto-sync.
+
+### Original Filter Calibration
 
 The first 120-second-window trial accepted one wrong-show pair out of 77
 deliberately mismatched pairs. That version was not deployed. We increased sample
