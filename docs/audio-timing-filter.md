@@ -30,7 +30,8 @@ the original download behavior.
 - Detect speech in 20 ms frames and aggregate it into 100 ms bins.
 - Parse SRT/ASS intervals with pysubs2; ignore ASS comments and events longer
   than 20 seconds (often signs or credits). Overlapping bilingual cues form a union.
-- Search a shared offset within +/-120 seconds and seven common frame-rate ratios.
+- Validate the current timeline at zero offset and rate 1. Displaced windows
+  within +/-120 seconds provide background statistics only; they cannot pass validation.
 - Compare normalized correlation against the distribution of deliberately
   displaced subtitle windows. Require a distinct peak and at least three matching
   windows, not just a large fraction of time occupied by subtitles.
@@ -38,8 +39,14 @@ the original download behavior.
   >=0.25 and peak z-score >=4; both paths require three window correlations >=0.15.
   These are heuristic thresholds, not probabilities of correctness.
 
-The best offset/rate is diagnostic only: this filter does not rewrite timing.
-Use Bazarr's existing subtitle synchronization for accepted but offset subtitles.
+Already aligned candidates pass directly without synchronization. On a timing
+failure, run offline ffsubsync with WebRTC VAD against the selected audio track
+on a temporary subtitle copy (maximum 120-second offset, 300-second timeout).
+Validate its corrected timeline using the same fixed-time thresholds. Only a
+passing corrected copy replaces candidate content; failures try the next candidate.
+Temporary input/output files are removed. SRT, ASS and SSA synchronization is
+supported, preserving the input format. The later automatic synchronization step
+is skipped for validated downloads. Existing manual synchronization remains available.
 Audio activity is cached by video path, size, modification time, audio track and
 algorithm version. The cache contains timing arrays, not audio or transcript text.
 The cache retains at most approximately 512 entries; extraction failures back off
@@ -88,7 +95,7 @@ cd frontend
 npm ci --ignore-scripts
 npm run build
 cd ..
-docker build -f docker/audio-timing/Dockerfile -t finalpi/bazarr:audio-timing-v1 .
+docker build -f docker/audio-timing/Dockerfile -t finalpi/bazarr:audio-timing-v2 .
 ```
 
 Merge `docker/audio-timing/compose.override.example.yml` into your existing Compose
