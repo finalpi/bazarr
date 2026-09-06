@@ -1,0 +1,4 @@
+services:
+  bazarr:
+    image: finalpi/bazarr:audio-timing-v1
+    pull_policy: never

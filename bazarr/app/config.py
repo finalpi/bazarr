@@ -97,6 +97,8 @@ validators = [
     Validator('general.auto_update', must_exist=True, default=True, is_type_of=bool),
     Validator('general.single_language', must_exist=True, default=False, is_type_of=bool),
     Validator('general.minimum_score', must_exist=True, default=90, is_type_of=int, gte=0, lte=100),
+    Validator('audio_validation.enabled', must_exist=True, default=False, is_type_of=bool),
+    Validator('audio_validation.audio_stream', must_exist=True, default=0, is_type_of=int, gte=0),
     Validator('general.use_scenename', must_exist=True, default=True, is_type_of=bool),
     Validator('general.use_postprocessing', must_exist=True, default=False, is_type_of=bool),
     Validator('general.postprocessing_cmd', must_exist=True, default='', is_type_of=str),

@@ -524,7 +524,7 @@ class SZProviderPool(ProviderPool):
         return True
 
     def download_best_subtitles(self, subtitles, video, languages, min_score=0, hearing_impaired=False, only_one=False,
-                                use_original_format=False, fallback_allowed=False):
+                                use_original_format=False, fallback_allowed=False, subtitle_validator=None):
         """Download the best matching subtitles.
 
         patch:
@@ -627,11 +627,14 @@ class SZProviderPool(ProviderPool):
             logger.debug("%r: Trying to download subtitle with matches %s, score: %s; release(s): %s", subtitle,
                          matches, score, subtitle.release_info)
             if self.download_subtitle(subtitle):
+                if subtitle_validator is not None and not subtitle_validator(video, subtitle):
+                    logger.info('Subtitle rejected by audio validation; trying next candidate')
+                    continue
                 subtitle.score = score
                 downloaded_subtitles.append(subtitle)
 
             # stop if only one subtitle is requested
-            if only_one:
+            if only_one and downloaded_subtitles:
                 logger.debug('Only one subtitle downloaded')
                 break
 
@@ -649,6 +652,8 @@ class SZProviderPool(ProviderPool):
                     logger.info('BAZARR Bulk Task: Falling back to Whisper for %r', video.name)
                     subtitle.use_original_format = use_original_format
                     if self.download_subtitle(subtitle):
+                        if subtitle_validator is not None and not subtitle_validator(video, subtitle):
+                            continue
                         subtitle.score = score
                         downloaded_subtitles.append(subtitle)
                         break
