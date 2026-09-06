@@ -133,6 +133,21 @@ const commandOptionElements: React.JSX.Element[] = commandOptions.map(
 const SettingsSubtitlesView: FunctionComponent = () => {
   return (
     <Layout name="Subtitles">
+      <Section header="Audio Timing Filter">
+        <Check
+          label="Require Audio Timing Match Before Saving"
+          settingKey="settings-audio_validation-enabled"
+        />
+        <CollapseBox indent settingKey="settings-audio_validation-enabled">
+          <Number
+            label="Audio Track Index"
+            settingKey="settings-audio_validation-audio_stream"
+            min={0}
+            max={32}
+            allowDecimal={false}
+          />
+        </CollapseBox>
+      </Section>
       <Section header="Subtitle File Options">
         <Selector
           label="Subtitle Folder"

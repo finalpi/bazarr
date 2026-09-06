@@ -20,6 +20,7 @@ from languages.get_languages import alpha3_from_alpha2
 from .pool import update_pools, _get_pool
 from .utils import get_video, _get_lang_obj, _get_scores, _set_forced_providers
 from .processing import process_subtitle
+from .audio_validation import validate_download
 
 
 @update_pools
@@ -79,7 +80,8 @@ def generate_subtitles(path, languages, audio_language, sceneName, title, media_
                                                                        min_score=int(min_score),
                                                                        hearing_impaired=hi_required,
                                                                        use_original_format=original_format in (1, "1", "True", True),
-                                                                       fallback_allowed=fallback_allowed)
+                                                                       fallback_allowed=fallback_allowed,
+                                                                       subtitle_validator=validate_download)
                     except Exception as e:
                         logging.exception(f'BAZARR Error downloading Subtitles for this file {path}: {repr(e)}')
                         return None

@@ -8,6 +8,7 @@ import subliminal
 
 from subzero.language import Language
 from subliminal_patch.core import save_subtitles
+from .audio_validation import validate_download
 from subliminal_patch.core_persistent import list_all_subtitles, download_subtitles
 from subliminal_patch.score import compute_score, DEFAULT_SCORES
 
@@ -188,6 +189,8 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
             if not subtitle.is_valid():
                 logging.error(f"BAZARR Downloaded subtitles isn't valid for this file: {path}")
                 return "Downloaded subtitles isn't valid. Check log."
+            if not validate_download(video, subtitle):
+                return 'Audio validation did not confirm this subtitle. Check log and try another candidate.'
             try:
                 chmod = int(settings.general.chmod, 8) if not sys.platform.startswith(
                     'win') and settings.general.chmod_enabled else None

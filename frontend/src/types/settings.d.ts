@@ -4,6 +4,7 @@ interface Settings {
   proxy: Settings.Proxy;
   auth: Settings.Auth;
   subsync: Settings.Subsync;
+  audio_validation: Settings.AudioValidation;
   analytics: Settings.Analytic;
   sonarr: Settings.Sonarr;
   radarr: Settings.Radarr;
@@ -28,6 +29,11 @@ interface Settings {
 }
 
 declare namespace Settings {
+  interface AudioValidation {
+    enabled: boolean;
+    audio_stream: number;
+  }
+
   interface General {
     adaptive_searching: boolean;
     adaptive_searching_delay: string;
