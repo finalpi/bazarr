@@ -189,7 +189,8 @@ class Subtitles(Resource):
                                              sonarr_series_id=metadata.sonarrSeriesId if media_type == "episode" else None,
                                              sonarr_episode_id=id,
                                              radarr_id=id,
-                                             metadata=metadata)
+                                             metadata=metadata,
+                                             low_priority=settings.translator.translator_type == 'openai_compatible')
 
                 except OSError:
                     return 'Unable to edit subtitles file. Check logs.', 409
