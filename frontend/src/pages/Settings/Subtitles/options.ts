@@ -196,6 +196,10 @@ export const translatorOption: SelectorOption<string>[] = [
     label: "Lingarr",
     value: "lingarr",
   },
+  {
+    label: "OpenAI Compatible (Ollama / GPT)",
+    value: "openai_compatible",
+  },
 ];
 
 export const forceAudioOption: SelectorOption<string>[] = [

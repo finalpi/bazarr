@@ -188,6 +188,12 @@ const TranslationForm: FunctionComponent<Props> = ({
           ...defaultConfig,
           service: "Lingarr",
         };
+      case "openai_compatible":
+        return {
+          ...defaultConfig,
+          service: "OpenAI Compatible",
+          model: ` (${settings?.data?.translator?.openai_model || ""})`,
+        };
       default:
         return defaultConfig;
     }
