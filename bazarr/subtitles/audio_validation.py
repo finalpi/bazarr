@@ -25,6 +25,7 @@ FRACTIONS = (0.12, 0.31, 0.50, 0.69, 0.88)
 RATES = (1.0, 1000 / 1001, 1001 / 1000, 24 / 25, 25 / 24, 24000 / 25025, 25025 / 24000)
 LOCKS = [threading.Lock() for _ in range(16)]
 FAILURES = {}
+TEXT_SUBTITLE_CODECS = {'ass', 'mov_text', 'ssa', 'srt', 'subrip', 'text', 'webvtt'}
 
 
 def _run(command):
@@ -154,7 +155,78 @@ def evaluate_activity(duration, starts, activity, intervals, search=False):
     return best
 
 
-def align_subtitle(video_path, text, binary, audio_stream=0):
+def _activity_from_intervals(duration, starts, intervals):
+    length = int(math.ceil(duration * HZ)) + 2
+    changes = np.zeros(length + 1)
+    scaled = np.rint(intervals * HZ).astype(np.int64)
+    left, right = np.clip(scaled[:, 0], 0, length), np.clip(scaled[:, 1], 0, length)
+    np.add.at(changes, left, 1)
+    np.add.at(changes, right, -1)
+    timeline = (np.cumsum(changes[:-1]) > 0).astype(float)
+    width = WINDOW_SECONDS * HZ
+    windows = []
+    for start in starts:
+        first = int(round(start * HZ))
+        window = np.zeros(width)
+        available = timeline[first:min(first + width, len(timeline))]
+        window[:len(available)] = available
+        windows.append(window)
+    return np.asarray(windows)
+
+
+def evaluate_reference_alignment(duration, starts, reference_intervals, candidate_intervals):
+    """Compare cue activity against a subtitle track muxed with the video."""
+    reference_activity = _activity_from_intervals(duration, starts, reference_intervals)
+    return evaluate_activity(duration, starts, reference_activity, candidate_intervals)
+
+
+def _normalized_language(value):
+    value = str(value or '').lower()
+    aliases = {'chi': 'zh', 'zho': 'zh', 'zht': 'zh', 'zh-tw': 'zh', 'eng': 'en'}
+    return aliases.get(value, value)
+
+
+def embedded_reference_candidates(video_path, cache_dir, binary, preferred_language=None):
+    """Return extractable full subtitle tracks, preferring the candidate language then English."""
+    try:
+        probe = json.loads(_run([
+            binary('ffprobe'), '-v', 'error', '-select_streams', 's', '-show_entries',
+            'stream=index,codec_name,disposition:stream_tags=language,title', '-of', 'json',
+            str(video_path)]))
+    except Exception:
+        logging.debug('BAZARR unable to inspect embedded subtitle references', exc_info=True)
+        return []
+
+    preferred = _normalized_language(preferred_language)
+    streams = []
+    for stream in probe.get('streams', []):
+        codec = str(stream.get('codec_name') or '').lower()
+        tags = stream.get('tags') or {}
+        title = str(tags.get('title') or '').lower()
+        disposition = stream.get('disposition') or {}
+        if codec not in TEXT_SUBTITLE_CODECS or disposition.get('forced') or any(
+                marker in title for marker in ('commentary', 'forced', 'signs')):
+            continue
+        language = _normalized_language(tags.get('language'))
+        priority = 0 if preferred and language == preferred else 1 if language == 'en' else 2
+        streams.append((priority, bool(disposition.get('hearing_impaired') or 'sdh' in title),
+                        int(stream['index'])))
+
+    from subtitles.embedded_translation import extract_embedded_subtitle
+    references = []
+    for _, _, track_id in sorted(streams)[:3]:
+        try:
+            path = extract_embedded_subtitle(video_path, track_id, cache_dir, binary)
+            intervals = parse_intervals(Path(path).read_text(encoding='utf-8-sig'))
+            if intervals[:, 1].max() - intervals[:, 0].min() < 600:
+                raise ValueError('Embedded subtitle reference covers less than 10 minutes')
+            references.append((path, intervals, track_id))
+        except Exception:
+            logging.debug('BAZARR unable to use embedded subtitle track %s', track_id, exc_info=True)
+    return references
+
+
+def align_subtitle(video_path, text, binary, audio_stream=0, reference_path=None):
     """Synchronize a temporary copy; return content only after successful output."""
     subtitles = pysubs2.SSAFile.from_string(text)
     format_ = subtitles.format
@@ -167,11 +239,14 @@ def align_subtitle(video_path, text, binary, audio_stream=0):
         env = os.environ.copy()
         # Bazarr adds vendored libraries to sys.path instead of installing them.
         env['PYTHONPATH'] = os.pathsep.join(str(Path(path).resolve()) for path in sys.path if path)
-        subprocess.run([sys.executable, '-m', 'ffsubsync.ffsubsync', str(video_path),
-                        '-i', str(source), '-o', str(output), '--vad', 'webrtc',
-                        '--reference-stream', '0:a:%d' % audio_stream,
-                        '--max-offset-seconds', str(MAX_OFFSET), '--encoding', 'utf-8',
-                        '--output-encoding', 'utf-8', '--ffmpeg-path', str(Path(binary('ffmpeg')).parent)],
+        reference = str(reference_path or video_path)
+        command = [sys.executable, '-m', 'ffsubsync.ffsubsync', reference,
+                   '-i', str(source), '-o', str(output)]
+        if reference_path is None:
+            command.extend(['--vad', 'webrtc', '--reference-stream', '0:a:%d' % audio_stream])
+        command.extend(['--max-offset-seconds', str(MAX_OFFSET), '--encoding', 'utf-8',
+                        '--output-encoding', 'utf-8', '--ffmpeg-path', str(Path(binary('ffmpeg')).parent)])
+        subprocess.run(command,
                        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                        check=True, timeout=300,
                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -193,18 +268,41 @@ def validate_download(video, subtitle):
         duration, starts, activity = extract_activity(
             video.original_path, os.path.join(args.config_dir, 'cache', 'audio-validation'),
             get_binary, settings.audio_validation.audio_stream)
-        result = evaluate_activity(duration, starts, activity, intervals)
-        logging.info('BAZARR Audio timing validation before sync for %s: %s', video.original_path, json.dumps(result))
-        if result['accepted']:
+        initial_result = evaluate_activity(duration, starts, activity, intervals)
+        logging.info('BAZARR Audio timing validation before sync for %s: %s',
+                     video.original_path, json.dumps(initial_result))
+        if initial_result['accepted']:
             subtitle.audio_timing_validated = True
             return True
-        if result['reason'] == 'insufficient_speech':
-            return False
-        aligned = align_subtitle(video.original_path, text, get_binary, settings.audio_validation.audio_stream)
-        result = evaluate_activity(duration, starts, activity, parse_intervals(aligned))
-        logging.info('BAZARR Audio timing validation after sync for %s: %s', video.original_path, json.dumps(result))
-        if not result['accepted']:
-            return False
+        preferred_language = getattr(getattr(subtitle, 'language', None), 'alpha3', None)
+        references = embedded_reference_candidates(
+            video.original_path, os.path.join(args.config_dir, 'cache', 'embedded-translation'),
+            get_binary, preferred_language)
+        aligned = None
+        for reference_path, reference_intervals, track_id in references:
+            try:
+                candidate = align_subtitle(video.original_path, text, get_binary,
+                                           settings.audio_validation.audio_stream, reference_path)
+                result = evaluate_reference_alignment(
+                    duration, starts, reference_intervals, parse_intervals(candidate))
+                logging.info('BAZARR Embedded subtitle timing validation after sync for %s track %s: %s',
+                             video.original_path, track_id, json.dumps(result))
+                if result['accepted']:
+                    aligned = candidate
+                    break
+            except Exception:
+                logging.debug('BAZARR embedded subtitle alignment failed for track %s', track_id, exc_info=True)
+        if aligned is None:
+            if initial_result['reason'] == 'insufficient_speech':
+                return False
+            candidate = align_subtitle(
+                video.original_path, text, get_binary, settings.audio_validation.audio_stream)
+            result = evaluate_activity(duration, starts, activity, parse_intervals(candidate))
+            logging.info('BAZARR Audio timing validation after sync for %s: %s',
+                         video.original_path, json.dumps(result))
+            if not result['accepted']:
+                return False
+            aligned = candidate
         # Commit corrected content only after validation; rejected originals never reach saving.
         subtitle.content = aligned.encode('utf-8')
         subtitle.encoding = subtitle._guessed_encoding = 'utf-8'

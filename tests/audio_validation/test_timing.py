@@ -60,6 +60,7 @@ def test_validate_then_sync_then_validate(monkeypatch, initial_pass, aligned_pas
     monkeypatch.setitem(sys.modules, 'utilities.binaries', SimpleNamespace(get_binary=str))
     monkeypatch.setattr(timing, 'parse_intervals', lambda text: text)
     monkeypatch.setattr(timing, 'extract_activity', lambda *args: (2400, [], []))
+    monkeypatch.setattr(timing, 'embedded_reference_candidates', lambda *args: [])
     calls = []
     def evaluate(*args):
         calls.append(args[-1])
@@ -76,6 +77,92 @@ def test_validate_then_sync_then_validate(monkeypatch, initial_pass, aligned_pas
     assert subtitle.audio_timing_validated == (initial_pass or aligned_pass)
     if not initial_pass and aligned_pass:
         assert subtitle.encoding == subtitle._guessed_encoding == 'utf-8'
+
+
+def test_embedded_reference_is_used_before_audio_alignment(monkeypatch):
+    monkeypatch.setitem(sys.modules, 'app.config', SimpleNamespace(
+        settings=SimpleNamespace(audio_validation=SimpleNamespace(enabled=True, audio_stream=0))))
+    monkeypatch.setitem(sys.modules, 'app.get_args', SimpleNamespace(args=SimpleNamespace(config_dir='config')))
+    monkeypatch.setitem(sys.modules, 'utilities.binaries', SimpleNamespace(get_binary=str))
+    monkeypatch.setattr(timing, 'parse_intervals', lambda text: text)
+    monkeypatch.setattr(timing, 'extract_activity', lambda *args: (2400, [], []))
+    monkeypatch.setattr(timing, 'evaluate_activity', lambda *args: {
+        'accepted': False, 'reason': 'timing_not_confirmed'})
+    monkeypatch.setattr(timing, 'embedded_reference_candidates',
+                        lambda *args: [('embedded.en.srt', 'reference intervals', 2)])
+    calls = []
+
+    def align(*args):
+        calls.append(args[-1] if len(args) == 5 else None)
+        return 'embedded corrected'
+
+    monkeypatch.setattr(timing, 'align_subtitle', align)
+    monkeypatch.setattr(timing, 'evaluate_reference_alignment', lambda *args: {
+        'accepted': True, 'reason': 'timing_match'})
+    subtitle = SimpleNamespace(text='original', content=b'original', language=SimpleNamespace(alpha3='zho'))
+    assert timing.validate_download(SimpleNamespace(original_path='video'), subtitle)
+    assert calls == ['embedded.en.srt']
+    assert subtitle.content == b'embedded corrected'
+
+
+def test_failed_embedded_alignment_falls_back_to_audio(monkeypatch):
+    monkeypatch.setitem(sys.modules, 'app.config', SimpleNamespace(
+        settings=SimpleNamespace(audio_validation=SimpleNamespace(enabled=True, audio_stream=0))))
+    monkeypatch.setitem(sys.modules, 'app.get_args', SimpleNamespace(args=SimpleNamespace(config_dir='config')))
+    monkeypatch.setitem(sys.modules, 'utilities.binaries', SimpleNamespace(get_binary=str))
+    monkeypatch.setattr(timing, 'parse_intervals', lambda text: text)
+    monkeypatch.setattr(timing, 'extract_activity', lambda *args: (2400, [], []))
+    results = iter(({'accepted': False, 'reason': 'timing_not_confirmed'},
+                    {'accepted': True, 'reason': 'timing_match'}))
+    monkeypatch.setattr(timing, 'evaluate_activity', lambda *args: next(results))
+    monkeypatch.setattr(timing, 'embedded_reference_candidates',
+                        lambda *args: [('broken.en.srt', 'reference intervals', 2)])
+
+    def align(*args):
+        if len(args) == 5:
+            raise ValueError('bad embedded track')
+        return 'audio corrected'
+
+    monkeypatch.setattr(timing, 'align_subtitle', align)
+    subtitle = SimpleNamespace(text='original', content=b'original', language=SimpleNamespace(alpha3='zho'))
+    assert timing.validate_download(SimpleNamespace(original_path='video'), subtitle)
+    assert subtitle.content == b'audio corrected'
+
+
+def test_reference_alignment_distinguishes_corrected_timing(media):
+    duration, starts, _, intervals = media
+    accepted = timing.evaluate_reference_alignment(duration, starts, intervals, intervals)
+    rejected = timing.evaluate_reference_alignment(duration, starts, intervals, intervals - 35)
+    assert accepted['accepted']
+    assert not rejected['accepted']
+
+
+def test_embedded_reference_selection_prefers_language_then_english_and_limits_tracks(tmp_path, monkeypatch):
+    import json
+    streams = [
+        {'index': 8, 'codec_name': 'hdmv_pgs_subtitle', 'tags': {'language': 'zho'}},
+        {'index': 9, 'codec_name': 'subrip', 'tags': {'language': 'zho', 'title': 'Forced'}},
+        {'index': 6, 'codec_name': 'subrip', 'tags': {'language': 'fra'}},
+        {'index': 7, 'codec_name': 'subrip', 'tags': {'language': 'deu'}},
+        {'index': 4, 'codec_name': 'subrip', 'tags': {'language': 'eng'}},
+        {'index': 5, 'codec_name': 'ass', 'tags': {'language': 'chi'}},
+    ]
+    monkeypatch.setattr(timing, '_run', lambda command: json.dumps({'streams': streams}).encode())
+    extracted = []
+
+    def extract(video, track_id, cache, binary):
+        extracted.append(track_id)
+        path = tmp_path / f'{track_id}.srt'
+        path.write_text('subtitle', encoding='utf-8')
+        return str(path)
+
+    monkeypatch.setitem(sys.modules, 'subtitles', SimpleNamespace())
+    monkeypatch.setitem(sys.modules, 'subtitles.embedded_translation', SimpleNamespace(
+        extract_embedded_subtitle=extract))
+    monkeypatch.setattr(timing, 'parse_intervals', lambda text: np.array([(0.0, 700.0)]))
+    references = timing.embedded_reference_candidates('video.mkv', tmp_path, str, 'zho')
+    assert extracted == [5, 4, 6]
+    assert [item[2] for item in references] == [5, 4, 6]
 
 
 def test_sync_failure_leaves_original_and_cleans_temporary_files(monkeypatch):
