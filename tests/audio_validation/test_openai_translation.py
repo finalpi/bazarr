@@ -57,6 +57,8 @@ def test_wraps_chinese_at_punctuation_and_parses_numbered_output():
     quoted = namespace['wrap_translation']('看来大学生们已经不再喜欢我的“胡志鳅”角色了。', width=18)
     assert not any(line.startswith(tuple('，。！？；：、”’》）】')) for line in quoted.split(r'\N'))
     assert not any(line.endswith(tuple('“‘《（【')) for line in quoted.split(r'\N'))
+    invented = namespace['wrap_translation']('呵，什么都这么“drivelous”。', width=10)
+    assert r'dr\Nivelous' not in invented
     assert namespace['_extract_numbered']('```text\n[2] 你好\n[3] 再见\n```', [2, 3]) == {
         2: '你好', 3: '再见'}
     assert namespace['_extract_numbered']('2. 你好\n3) 再见', [2, 3]) == {
