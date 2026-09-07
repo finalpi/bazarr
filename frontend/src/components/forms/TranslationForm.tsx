@@ -151,15 +151,31 @@ const TranslationForm: FunctionComponent<Props> = ({
 
   const translatorType = settings?.data?.translator?.translator_type;
   const isGoogleTranslator = translatorType === "google_translate";
+  const sourceCodes = useMemo(
+    () => new Set(selections.map((selection) => selection.language)),
+    [selections],
+  );
+  const sourceNames = useMemo(
+    () =>
+      Array.from(sourceCodes).map(
+        (code) =>
+          languages.find((language) => language.code2 === code)?.name ??
+          code.toUpperCase(),
+      ),
+    [languages, sourceCodes],
+  );
 
   const available = useMemo(() => {
+    const targets = languages.filter(
+      (language) => !sourceCodes.has(language.code2),
+    );
     // Only filter by translations if using Google Translate
     if (isGoogleTranslator) {
-      return languages.filter((v) => v.code2 in translations);
+      return targets.filter((v) => v.code2 in translations);
     }
     // For other translators, return all enabled languages
-    return languages;
-  }, [languages, isGoogleTranslator]);
+    return targets;
+  }, [languages, isGoogleTranslator, sourceCodes]);
 
   const options = useSelectorOptions(
     available,
@@ -239,6 +255,7 @@ const TranslationForm: FunctionComponent<Props> = ({
       <Stack pos="relative">
         <LoadingOverlay visible={isPending} />
         <Alert>
+          <div>Source: {sourceNames.join(", ")}</div>
           <div>
             {translatorService}
             {translatorModel} will be used.
@@ -253,7 +270,12 @@ const TranslationForm: FunctionComponent<Props> = ({
             {translatorService}.
           </Alert>
         )}
-        <Selector {...options} {...form.getInputProps("language")}></Selector>
+        <Selector
+          label="Translate to"
+          placeholder="Select target language"
+          {...options}
+          {...form.getInputProps("language")}
+        ></Selector>
         <Divider></Divider>
         <Button type="submit" loading={isPending}>
           Start
