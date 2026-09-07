@@ -17,7 +17,7 @@ import pysubs2
 def load_translation_namespace(settings):
     source = ROOT / 'bazarr/subtitles/tools/translate/services/openai_translator.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
-    wanted = {'_plain', 'wrap_translation', '_extract_numbered', '_numbered',
+    wanted = {'_plain', 'wrap_translation', '_ass_color', 'apply_ass_style', '_extract_numbered', '_numbered',
               'OpenAICompatibleTranslatorService'}
     nodes = [node for node in tree.body if getattr(node, 'name', None) in wanted]
     namespace = {
@@ -38,7 +38,11 @@ def translator_settings(**overrides):
     values = dict(openai_model='qwen-test', openai_batch_size=2, openai_context_lines=1,
                   openai_bilingual=True, openai_api_key='',
                   openai_base_url='http://host.docker.internal:11434/v1', openai_timeout=300,
-                  translator_info=False)
+                  translator_info=False, openai_styled_ass=False,
+                  openai_ass_font_name='Noto Sans CJK SC', openai_ass_font_size=52,
+                  openai_ass_primary_color='#FFFFFF', openai_ass_outline_color='#000000',
+                  openai_ass_bold=True, openai_ass_outline=3, openai_ass_shadow=1,
+                  openai_ass_margin_v=54)
     values.update(overrides)
     return SimpleNamespace(translator=SimpleNamespace(**values))
 
@@ -91,6 +95,38 @@ def test_context_batches_and_bilingual_output_preserve_cue_timing(tmp_path):
     assert [item['index'] for item in batches[1][1]] == [1, 2, 3, 4]
     assert batches[1][1][0]['translation'] == '这是结合前后文翻译后的自然中文句子。'
     assert batches[1][1][-1]['translation'] is None
+
+
+def test_styled_ass_output_uses_configured_appearance(tmp_path):
+    settings = translator_settings(
+        openai_styled_ass=True, openai_ass_font_name='PingFang SC',
+        openai_ass_font_size=58, openai_ass_primary_color='#FFE66D',
+        openai_ass_outline_color='#102030', openai_ass_bold=False,
+        openai_ass_outline=4, openai_ass_shadow=2, openai_ass_margin_v=72)
+    namespace = load_translation_namespace(settings)
+    source, destination = tmp_path / 'source.srt', tmp_path / 'episode.llm.zh.ass'
+    subtitles = pysubs2.SSAFile()
+    subtitles.append(pysubs2.SSAEvent(start=1000, end=2500, text='Hello'))
+    subtitles.save(source, format_='srt', encoding='utf-8')
+    service = make_service(namespace, source, destination)
+    service._translate_batch = lambda targets, context, description: {
+        item['index']: '你好' for item in targets}
+
+    assert service.translate(job_id=1) == str(destination)
+    result = pysubs2.load(destination, encoding='utf-8')
+    style = result.styles['LLM']
+    assert result.info['PlayResX'] == '1920'
+    assert result.info['PlayResY'] == '1080'
+    assert style.fontname == 'PingFang SC'
+    assert style.fontsize == 58
+    assert style.primarycolor == pysubs2.Color(255, 230, 109)
+    assert style.outlinecolor == pysubs2.Color(16, 32, 48)
+    assert style.bold is False
+    assert style.outline == 4
+    assert style.shadow == 2
+    assert style.marginv == 72
+    assert result[0].style == 'LLM'
+    assert result[0].text == r'Hello\N你好'
 
 
 def test_request_bounds_model_output_and_validates_indices():
