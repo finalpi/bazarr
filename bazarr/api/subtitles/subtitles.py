@@ -181,6 +181,8 @@ class Subtitles(Resource):
 
                 if not from_language or not alpha3_from_alpha2(from_language):
                     return 'Invalid source language code', 400
+                if from_language == dest_language:
+                    return 'Source and target languages must be different', 400
 
                 try:
                     translate_subtitles_file(video_path=video_path, source_srt_file=subtitles_path,
