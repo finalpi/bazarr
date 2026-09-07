@@ -77,6 +77,11 @@ def test_wraps_chinese_at_punctuation_and_parses_numbered_output():
     assert r'dr\Nivelous' not in invented
     sentence = '好，很好。你开始能感知别人而不只是自己的感受了。'
     assert r'\N' not in namespace['wrap_translation'](sentence)
+    assert namespace['wrap_translation']('这句很短<br>不应换行') == '这句很短不应换行'
+    model_wrapped = namespace['wrap_translation'](
+        '你已经开始理解其他人的真实感受<br>而不再只是关注自己的想法和处境。')
+    assert model_wrapped == (
+        '你已经开始理解其他人的真实感受' + r'\N' + '而不再只是关注自己的想法和处境。')
     clause = namespace['wrap_translation'](sentence, width=18)
     assert r'别\N人' not in clause
     assert r'别人\N而' in clause
