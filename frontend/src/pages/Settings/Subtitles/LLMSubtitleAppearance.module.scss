@@ -24,14 +24,14 @@
   align-items: center;
   line-height: 1.28;
   text-align: center;
-  transition:
-    bottom 120ms ease,
-    color 120ms ease,
-    font-size 120ms ease;
+  transition: bottom 120ms ease;
 }
 
 .caption span {
   display: block;
   max-width: 100%;
   overflow-wrap: anywhere;
+  transition:
+    color 120ms ease,
+    font-size 120ms ease;
 }

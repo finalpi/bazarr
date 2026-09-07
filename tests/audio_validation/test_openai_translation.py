@@ -17,7 +17,7 @@ import pysubs2
 def load_translation_namespace(settings):
     source = ROOT / 'bazarr/subtitles/tools/translate/services/openai_translator.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
-    wanted = {'_plain', 'wrap_translation', '_ass_color', 'apply_ass_style', '_extract_numbered', '_numbered',
+    wanted = {'_plain', 'wrap_translation', '_ass_color', '_ass_style', 'apply_ass_style', '_extract_numbered', '_numbered',
               'OpenAICompatibleTranslatorService'}
     nodes = [node for node in tree.body if getattr(node, 'name', None) in wanted]
     namespace = {
@@ -42,7 +42,18 @@ def translator_settings(**overrides):
                   openai_ass_font_name='Noto Sans CJK SC', openai_ass_font_size=52,
                   openai_ass_primary_color='#FFFFFF', openai_ass_outline_color='#000000',
                   openai_ass_bold=True, openai_ass_outline=3, openai_ass_shadow=1,
-                  openai_ass_margin_v=54)
+                  openai_ass_margin_v=54,
+                  openai_ass_chinese_font_name='Noto Sans CJK SC',
+                  openai_ass_chinese_font_size=52,
+                  openai_ass_chinese_primary_color='#FFE66D',
+                  openai_ass_chinese_outline_color='#000000',
+                  openai_ass_chinese_bold=True, openai_ass_chinese_outline=3,
+                  openai_ass_chinese_shadow=0,
+                  openai_ass_original_font_name='Arial', openai_ass_original_font_size=32,
+                  openai_ass_original_primary_color='#FFFFFF',
+                  openai_ass_original_outline_color='#000000',
+                  openai_ass_original_bold=False, openai_ass_original_outline=2,
+                  openai_ass_original_shadow=0, openai_ass_bilingual_margin_v=60)
     values.update(overrides)
     return SimpleNamespace(translator=SimpleNamespace(**values))
 
@@ -99,10 +110,15 @@ def test_context_batches_and_bilingual_output_preserve_cue_timing(tmp_path):
 
 def test_styled_ass_output_uses_configured_appearance(tmp_path):
     settings = translator_settings(
-        openai_styled_ass=True, openai_ass_font_name='PingFang SC',
-        openai_ass_font_size=58, openai_ass_primary_color='#FFE66D',
-        openai_ass_outline_color='#102030', openai_ass_bold=False,
-        openai_ass_outline=4, openai_ass_shadow=2, openai_ass_margin_v=72)
+        openai_styled_ass=True,
+        openai_ass_chinese_font_name='PingFang SC', openai_ass_chinese_font_size=58,
+        openai_ass_chinese_primary_color='#FFE66D', openai_ass_chinese_outline_color='#102030',
+        openai_ass_chinese_bold=False, openai_ass_chinese_outline=4,
+        openai_ass_chinese_shadow=2,
+        openai_ass_original_font_name='Helvetica', openai_ass_original_font_size=30,
+        openai_ass_original_primary_color='#FFFFFF', openai_ass_original_outline_color='#203040',
+        openai_ass_original_bold=True, openai_ass_original_outline=2,
+        openai_ass_original_shadow=1, openai_ass_bilingual_margin_v=72)
     namespace = load_translation_namespace(settings)
     source, destination = tmp_path / 'source.srt', tmp_path / 'episode.llm.zh.ass'
     subtitles = pysubs2.SSAFile()
@@ -114,19 +130,46 @@ def test_styled_ass_output_uses_configured_appearance(tmp_path):
 
     assert service.translate(job_id=1) == str(destination)
     result = pysubs2.load(destination, encoding='utf-8')
-    style = result.styles['LLM']
+    chinese_style = result.styles['Chinese']
+    original_style = result.styles['Original']
     assert result.info['PlayResX'] == '1920'
     assert result.info['PlayResY'] == '1080'
-    assert style.fontname == 'PingFang SC'
-    assert style.fontsize == 58
-    assert style.primarycolor == pysubs2.Color(255, 230, 109)
-    assert style.outlinecolor == pysubs2.Color(16, 32, 48)
-    assert style.bold is False
-    assert style.outline == 4
-    assert style.shadow == 2
-    assert style.marginv == 72
-    assert result[0].style == 'LLM'
-    assert result[0].text == r'Hello\N你好'
+    assert result.info['Collisions'] == 'Reverse'
+    assert chinese_style.fontname == 'PingFang SC'
+    assert chinese_style.fontsize == 58
+    assert chinese_style.primarycolor == pysubs2.Color(255, 230, 109)
+    assert chinese_style.outlinecolor == pysubs2.Color(16, 32, 48)
+    assert chinese_style.bold is False
+    assert chinese_style.outline == 4
+    assert chinese_style.shadow == 2
+    assert original_style.fontname == 'Helvetica'
+    assert original_style.fontsize == 30
+    assert original_style.primarycolor == pysubs2.Color(255, 255, 255)
+    assert original_style.outlinecolor == pysubs2.Color(32, 48, 64)
+    assert original_style.bold is True
+    assert original_style.outline == 2
+    assert original_style.shadow == 1
+    assert chinese_style.marginv == original_style.marginv == 72
+    assert [(cue.style, cue.text) for cue in result] == [
+        ('Original', 'Hello'), ('Chinese', '你好')]
+    assert result[0].start == result[1].start == 1000
+    assert result[0].end == result[1].end == 2500
+
+
+def test_styled_ass_chinese_only_does_not_duplicate_events(tmp_path):
+    settings = translator_settings(openai_styled_ass=True, openai_bilingual=False)
+    namespace = load_translation_namespace(settings)
+    source, destination = tmp_path / 'source.srt', tmp_path / 'episode.llm.zh.ass'
+    subtitles = pysubs2.SSAFile()
+    subtitles.append(pysubs2.SSAEvent(start=1000, end=2500, text='Hello'))
+    subtitles.save(source, format_='srt', encoding='utf-8')
+    service = make_service(namespace, source, destination)
+    service._translate_batch = lambda targets, context, description: {
+        item['index']: '你好' for item in targets}
+
+    service.translate(job_id=1)
+    result = pysubs2.load(destination, encoding='utf-8')
+    assert [(cue.style, cue.text) for cue in result] == [('Chinese', '你好')]
 
 
 def test_request_bounds_model_output_and_validates_indices():

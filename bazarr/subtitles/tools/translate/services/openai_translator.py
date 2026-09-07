@@ -69,26 +69,54 @@ def _ass_color(value, fallback):
     return pysubs2.Color(*(int(color[index:index + 2], 16) for index in (0, 2, 4)))
 
 
-def apply_ass_style(subtitles):
-    subtitles.info['PlayResX'] = '1920'
-    subtitles.info['PlayResY'] = '1080'
-    subtitles.info['ScaledBorderAndShadow'] = 'yes'
-    subtitles.styles['LLM'] = pysubs2.SSAStyle(
-        fontname=str(settings.translator.openai_ass_font_name).strip() or 'Noto Sans CJK SC',
-        fontsize=int(settings.translator.openai_ass_font_size),
-        primarycolor=_ass_color(settings.translator.openai_ass_primary_color, '#FFFFFF'),
-        outlinecolor=_ass_color(settings.translator.openai_ass_outline_color, '#000000'),
-        backcolor=_ass_color(settings.translator.openai_ass_outline_color, '#000000'),
-        bold=bool(settings.translator.openai_ass_bold),
-        outline=int(settings.translator.openai_ass_outline),
-        shadow=int(settings.translator.openai_ass_shadow),
+def _ass_style(prefix, default_font, default_color, margin):
+    outline_color = getattr(settings.translator, prefix + '_outline_color')
+    return pysubs2.SSAStyle(
+        fontname=str(getattr(settings.translator, prefix + '_font_name')).strip() or default_font,
+        fontsize=int(getattr(settings.translator, prefix + '_font_size')),
+        primarycolor=_ass_color(getattr(settings.translator, prefix + '_primary_color'), default_color),
+        outlinecolor=_ass_color(outline_color, '#000000'),
+        backcolor=_ass_color(outline_color, '#000000'),
+        bold=bool(getattr(settings.translator, prefix + '_bold')),
+        outline=int(getattr(settings.translator, prefix + '_outline')),
+        shadow=int(getattr(settings.translator, prefix + '_shadow')),
         alignment=pysubs2.Alignment.BOTTOM_CENTER,
         marginl=40,
         marginr=40,
-        marginv=int(settings.translator.openai_ass_margin_v),
+        marginv=margin,
     )
+
+
+def apply_ass_style(subtitles, bilingual=False):
+    subtitles.info['PlayResX'] = '1920'
+    subtitles.info['PlayResY'] = '1080'
+    subtitles.info['ScaledBorderAndShadow'] = 'yes'
+    subtitles.info['Collisions'] = 'Reverse'
+    margin = int(settings.translator.openai_ass_bilingual_margin_v)
+    subtitles.styles['Chinese'] = _ass_style(
+        'openai_ass_chinese', 'Noto Sans CJK SC', '#FFE66D', margin)
+    subtitles.styles['Original'] = _ass_style(
+        'openai_ass_original', 'Arial', '#FFFFFF', margin)
+
+    if not bilingual:
+        for cue in subtitles:
+            cue.style = 'Chinese'
+        return subtitles
+
+    events = []
     for cue in subtitles:
-        cue.style = 'LLM'
+        original, separator, chinese = cue.text.partition(r'\N')
+        if not separator:
+            cue.style = 'Chinese'
+            events.append(cue)
+            continue
+        original_cue = cue.copy()
+        original_cue.text = original
+        original_cue.style = 'Original'
+        cue.text = chinese
+        cue.style = 'Chinese'
+        events.extend((original_cue, cue))
+    subtitles.events = events
     return subtitles
 
 
@@ -233,6 +261,7 @@ class OpenAICompatibleTranslatorService:
             cue.text = originals[index] + r'\N' + chinese if bilingual else chinese
         styled_ass = bool(settings.translator.openai_styled_ass)
         if styled_ass:
+            apply_ass_style(subtitles, bilingual=bilingual)
             if settings.translator.translator_info:
                 first_start = subtitles[0].start
                 info_end = min(first_start, 5000)
@@ -241,8 +270,8 @@ class OpenAICompatibleTranslatorService:
                     start=info_start,
                     end=info_end,
                     text='# Subtitles translated with %s # ' % settings.translator.openai_model,
+                    style='Original',
                 ))
-            apply_ass_style(subtitles)
         temporary = self.dest_srt_file + '.tmp'
         try:
             subtitles.save(temporary, format_='ass' if styled_ass else 'srt', encoding='utf-8')
