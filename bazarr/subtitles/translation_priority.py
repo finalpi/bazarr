@@ -22,3 +22,19 @@ def counts_as_available_subtitle(item, use_embedded_subs):
     if item.get('embedded_track_id') is not None:
         return bool(use_embedded_subs and item.get('code2') not in ('zh', 'zt'))
     return False
+
+
+def append_original_language(languages, original_code2, existing):
+    """Add an external original-language search when no usable source already exists."""
+    if not original_code2 or original_code2 in ('zh', 'zt'):
+        return list(languages), None
+    available = any(
+        item.get('code2') == original_code2 and not item.get('forced') and
+        (item.get('embedded_track_id') is not None or item.get('path'))
+        for item in existing)
+    result = list(languages)
+    candidate = (original_code2, 'False', 'False')
+    if available or candidate in result:
+        return result, None
+    result.append(candidate)
+    return result, candidate

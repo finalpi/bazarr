@@ -82,7 +82,8 @@ def process_subtitle(subtitle, media_type, audio_language, path, max_score, is_u
 
     if media_type == 'series':
         episode_metadata = database.execute(
-            select(TableShows.imdbId, TableShows.tvdbId, TableEpisodes.sonarrSeriesId,
+            select(TableShows.imdbId, TableShows.tvdbId, TableShows.originalLanguage,
+                   TableEpisodes.sonarrSeriesId,
                    TableEpisodes.sonarrEpisodeId, TableEpisodes.season, TableEpisodes.episode)
                 .join(TableShows)\
                 .where(TableEpisodes.path == path_mappings.path_replace_reverse(path)))\
@@ -104,7 +105,8 @@ def process_subtitle(subtitle, media_type, audio_language, path, max_score, is_u
                            job_id=job_id)
     else:
         movie_metadata = database.execute(
-            select(TableMovies.radarrId, TableMovies.imdbId, TableMovies.tmdbId)
+            select(TableMovies.radarrId, TableMovies.imdbId, TableMovies.tmdbId,
+                   TableMovies.originalLanguage)
                 .where(TableMovies.path == path_mappings.path_replace_reverse_movie(path)))\
             .first()
         if not movie_metadata:
@@ -219,11 +221,13 @@ def _queue_missing_chinese_translation(video_path, source_path=None, source_lang
         if metadata is None:
             if media_type == 'series':
                 metadata = database.execute(
-                    select(TableEpisodes.sonarrSeriesId, TableEpisodes.sonarrEpisodeId)
+                    select(TableEpisodes.sonarrSeriesId, TableEpisodes.sonarrEpisodeId,
+                           TableShows.originalLanguage)
+                    .select_from(TableEpisodes).join(TableShows)
                     .where(TableEpisodes.path == path_mappings.path_replace_reverse(video_path))).first()
             else:
                 metadata = database.execute(
-                    select(TableMovies.radarrId)
+                    select(TableMovies.radarrId, TableMovies.originalLanguage)
                     .where(TableMovies.path == path_mappings.path_replace_reverse_movie(video_path))).first()
             if metadata is None:
                 return False
@@ -255,42 +259,57 @@ def _queue_missing_chinese_translation(video_path, source_path=None, source_lang
             logging.debug('BAZARR automatic translation skipped because destination already exists: %s', destination)
             return False
 
-        embedded_english = sorted(
-            (item for item in existing if item['code2'] == 'en' and
-             item.get('embedded_track_id') is not None and not item.get('forced')),
-            key=lambda item: bool(item.get('hi')))
-        if embedded_english:
-            try:
-                from app.get_args import args
-                from utilities.binaries import get_binary
-                from subtitles.embedded_translation import extract_embedded_subtitle
-                source_path = extract_embedded_subtitle(
-                    video_path, embedded_english[0]['embedded_track_id'],
-                    os.path.join(args.config_dir, 'cache', 'embedded-translation'), get_binary)
-                source_language = 'en'
-            except Exception:
-                logging.exception('BAZARR unable to extract preferred embedded English subtitles')
-
-        if source_language != 'en' or not source_path or not os.path.isfile(source_path):
-            external_english = next(
-                (item for item in existing if item['code2'] == 'en' and item.get('path') and
+        original_name = getattr(metadata, 'originalLanguage', None)
+        if original_name:
+            from languages.get_languages import alpha2_from_language
+            original_language = alpha2_from_language(original_name)
+        else:
+            original_language = None
+        source_languages = [code for code in (original_language, 'en') if code and code not in ('zh', 'zt')]
+        source_languages = list(dict.fromkeys(source_languages))
+        supplied_path, supplied_language = source_path, source_language
+        source_path = source_language = None
+        for language in source_languages:
+            embedded = sorted(
+                (item for item in existing if item['code2'] == language and
+                 item.get('embedded_track_id') is not None and not item.get('forced')),
+                key=lambda item: bool(item.get('hi')))
+            if embedded:
+                try:
+                    from app.get_args import args
+                    from utilities.binaries import get_binary
+                    from subtitles.embedded_translation import extract_embedded_subtitle
+                    source_path = extract_embedded_subtitle(
+                        video_path, embedded[0]['embedded_track_id'],
+                        os.path.join(args.config_dir, 'cache', 'embedded-translation'), get_binary)
+                    source_language = language
+                except Exception:
+                    logging.exception('BAZARR unable to extract preferred embedded %s subtitles', language)
+            if source_path and os.path.isfile(source_path):
+                break
+            if supplied_language == language and supplied_path and os.path.isfile(supplied_path):
+                source_path, source_language = supplied_path, language
+                break
+            external = next(
+                (item for item in existing if item['code2'] == language and item.get('path') and
                  os.path.isfile(item['path']) and not item.get('forced') and
                  not is_llm_subtitle(item['path'])), None)
-            if external_english:
-                source_path = external_english['path']
-                source_language = 'en'
-        if source_language != 'en' or not source_path or not os.path.isfile(source_path):
-            logging.debug('BAZARR automatic translation skipped because no English subtitle source exists')
+            if external:
+                source_path, source_language = external['path'], language
+                break
+        if not source_language or not source_path or not os.path.isfile(source_path):
+            logging.debug('BAZARR automatic translation skipped because no original-language or English source exists')
             return False
 
         from subtitles.tools.translate.main import translate_subtitles_file
         translate_subtitles_file(
-            video_path=video_path, source_srt_file=source_path, from_lang='en', to_lang='zh',
+            video_path=video_path, source_srt_file=source_path, from_lang=source_language, to_lang='zh',
             forced=False, hi=False, media_type='episode' if media_type == 'series' else 'movie',
             sonarr_series_id=metadata.sonarrSeriesId if media_type == 'series' else None,
             sonarr_episode_id=item_id if media_type == 'series' else None,
             radarr_id=item_id if media_type != 'series' else None, metadata=metadata, low_priority=True)
-        logging.info('BAZARR queued automatic English-to-Chinese subtitle translation for %s', video_path)
+        logging.info('BAZARR queued automatic %s-to-Chinese subtitle translation for %s',
+                     source_language, video_path)
         return True
     except Exception:
         logging.exception('BAZARR unable to queue automatic subtitle translation for %s', video_path)
