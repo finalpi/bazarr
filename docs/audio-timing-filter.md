@@ -95,7 +95,7 @@ cd frontend
 npm ci --ignore-scripts
 npm run build
 cd ..
-docker build -f docker/audio-timing/Dockerfile -t finalpi/bazarr:audio-timing-v3 .
+docker build -f docker/audio-timing/Dockerfile -t finalpi/bazarr:audio-timing-v4 .
 ```
 
 Merge `docker/audio-timing/compose.override.example.yml` into your existing Compose

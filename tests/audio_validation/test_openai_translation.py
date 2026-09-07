@@ -80,6 +80,29 @@ def test_context_batches_and_bilingual_output_preserve_cue_timing(tmp_path):
     assert [item['translate'] for item in batches[1][1]] == [False, True, True, False]
 
 
+def test_request_bounds_model_output_and_validates_indices():
+    settings = translator_settings()
+    namespace = load_translation_namespace(settings)
+    captured = {}
+    class Response:
+        @staticmethod
+        def raise_for_status():
+            return None
+        @staticmethod
+        def json():
+            return {'choices': [{'message': {'content':
+                    '{"translations":[{"index":0,"translation":"你好"}]}'}}]}
+    def post(url, **kwargs):
+        captured.update(url=url, **kwargs)
+        return Response()
+    namespace['requests'] = SimpleNamespace(post=post, RequestException=Exception)
+    service = make_service(namespace, 'source.srt', 'translated.srt')
+    target = [{'index': 0, 'content': 'Hello'}]
+    assert service._request(target, [dict(target[0], translate=True)], '') == {0: '你好'}
+    assert captured['json']['max_tokens'] == 512
+    assert captured['timeout'] == 300
+
+
 def processing_function(name, namespace):
     source = ROOT / 'bazarr/subtitles/processing.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
