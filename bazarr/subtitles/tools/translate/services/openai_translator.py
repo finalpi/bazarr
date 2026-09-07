@@ -50,14 +50,33 @@ def wrap_translation(text, width=18):
     return r'\N'.join(lines)
 
 
-def _extract_json(content):
+def _extract_numbered(content, target_ids):
     content = content.strip()
     if content.startswith('```'):
-        content = re.sub(r'^```(?:json)?\s*|\s*```$', '', content, flags=re.I | re.S)
-    start, end = content.find('{'), content.rfind('}')
-    if start < 0 or end < start:
-        raise ValueError('Model response does not contain a JSON object')
-    return json.loads(content[start:end + 1])
+        content = re.sub(r'^```(?:text)?\s*|\s*```$', '', content, flags=re.I | re.S)
+    requested = set(target_ids)
+    result = {}
+    for line in content.splitlines():
+        match = re.match(r'^\s*\[(\d+)]\s*(.+?)\s*$', line)
+        if not match:
+            continue
+        index, translation = int(match.group(1)), match.group(2).strip()
+        if index in result or index not in requested or not translation:
+            raise ValueError('Model returned invalid or duplicate subtitle indices')
+        result[index] = translation
+    if set(result) != requested:
+        raise ValueError('Model did not return every requested subtitle index')
+    return result
+
+
+def _numbered(items, include_translation=False):
+    lines = []
+    for item in items:
+        line = '[%d] %s' % (item['index'], item['content'])
+        if include_translation and item.get('translation'):
+            line += ' => ' + item['translation']
+        lines.append(line)
+    return '\n'.join(lines) or '(none)'
 
 
 class OpenAICompatibleTranslatorService:
@@ -84,27 +103,33 @@ class OpenAICompatibleTranslatorService:
 
     def _request(self, targets, context, description):
         target_ids = [item['index'] for item in targets]
-        system = (
-            'You are a professional audiovisual subtitle translator. Translate into Simplified Chinese. '
-            'Use all supplied neighboring cues to resolve pronouns, names, tone, jokes and terminology. '
-            'Translate only entries whose translate field is true. Preserve meaning and natural spoken Chinese. '
-            'Do not merge, split, omit or renumber cues. Return JSON only as '
-            '{"translations":[{"index":integer,"translation":string}]}. '
-            'Return every requested index exactly once. Do not include timestamps or the source text. '
-            'Keep each translation concise enough for its original display interval. '
-            'Use Chinese punctuation and sentence boundaries; do not insert line breaks.'
-        )
-        if description:
-            system += '\nMedia context: ' + description
+        target_set = set(target_ids)
+        surrounding = [item for item in context if item['index'] not in target_set]
+        prompt = (
+            'Translate the following English audiovisual subtitles into polished Simplified Chinese.\n\n'
+            'Read all cues as one continuous scene and use adjacent cues only to understand pronouns, '
+            'fragments, tone, jokes, terminology and implied intent.\n\n'
+            'Requirements:\n'
+            '1. Produce concise, idiomatic spoken Chinese suitable for streaming subtitles.\n'
+            '2. Preserve the precise meaning, emotional intensity, speaker changes, names and technical terms.\n'
+            '3. Use established Simplified Chinese transliterations for personal names and keep them consistent.\n'
+            '4. Correct malformed source wording only when the intended meaning is strongly supported by adjacent dialogue; otherwise preserve the ambiguity.\n'
+            '5. Never add unstated specifications, directions, relationships, actions or plot facts.\n'
+            '6. Never move information between cues or complete a sentence early. Each output must contain only information expressed in its matching source cue.\n'
+            '7. Preserve interruptions, hesitation and unfinished sentences with Chinese ellipses.\n'
+            '8. Retain separate leading dashes when a cue contains multiple speakers.\n'
+            '9. Return every requested [number] exactly once and on one line.\n'
+            '10. Output numbered translations only, without Markdown, explanations or source text.\n\n'
+            'Media context:\n%s\n\n'
+            'Surrounding context (understand only; do not output these numbers):\n%s\n\n'
+            'Subtitles to translate:\n%s'
+        ) % (description or '(none)', _numbered(surrounding, include_translation=True), _numbered(targets))
         payload = {
             'model': settings.translator.openai_model,
-            'temperature': 0.2,
+            'temperature': 0,
             # Bound verbose/reasoning-capable local models while leaving enough room per cue.
             'max_tokens': max(512, min(8192, len(targets) * 128)),
-            'messages': [
-                {'role': 'system', 'content': system},
-                {'role': 'user', 'content': json.dumps({'cues': context}, ensure_ascii=False)},
-            ],
+            'messages': [{'role': 'user', 'content': prompt}],
         }
         headers = {'Content-Type': 'application/json'}
         api_key = str(settings.translator.openai_api_key).strip()
@@ -114,20 +139,7 @@ class OpenAICompatibleTranslatorService:
                                  headers=headers, timeout=int(settings.translator.openai_timeout))
         response.raise_for_status()
         body = response.json()
-        parsed = _extract_json(body['choices'][0]['message']['content'])
-        translations = parsed.get('translations')
-        if not isinstance(translations, list):
-            raise ValueError('Model response is missing translations')
-        result = {}
-        for item in translations:
-            index = item.get('index')
-            translation = item.get('translation')
-            if index in result or index not in target_ids or not isinstance(translation, str) or not translation.strip():
-                raise ValueError('Model returned invalid or duplicate subtitle indices')
-            result[index] = translation.strip()
-        if set(result) != set(target_ids):
-            raise ValueError('Model did not return every requested subtitle index')
-        return result
+        return _extract_numbered(body['choices'][0]['message']['content'], target_ids)
 
     def _translate_batch(self, targets, context, description):
         error = None
@@ -157,7 +169,8 @@ class OpenAICompatibleTranslatorService:
             end = min(start + batch_size, len(subtitles))
             context_start, context_end = max(0, start - overlap), min(len(subtitles), end + overlap)
             targets = [{'index': index, 'content': originals[index]} for index in range(start, end)]
-            context = [{'index': index, 'content': originals[index], 'translate': start <= index < end}
+            context = [{'index': index, 'content': originals[index],
+                        'translation': translated.get(index)}
                        for index in range(context_start, context_end)]
             translated.update(self._translate_batch(targets, context, description))
             jobs_queue.update_job_progress(job_id=job_id, progress_value=end,

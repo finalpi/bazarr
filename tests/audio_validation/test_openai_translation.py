@@ -16,7 +16,8 @@ import pysubs2
 def load_translation_namespace(settings):
     source = ROOT / 'bazarr/subtitles/tools/translate/services/openai_translator.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
-    wanted = {'_plain', 'wrap_translation', '_extract_json', 'OpenAICompatibleTranslatorService'}
+    wanted = {'_plain', 'wrap_translation', '_extract_numbered', '_numbered',
+              'OpenAICompatibleTranslatorService'}
     nodes = [node for node in tree.body if getattr(node, 'name', None) in wanted]
     namespace = {
         'json': json, 'logging': logging, 'os': os, 're': re, 'time': __import__('time'),
@@ -48,12 +49,13 @@ def make_service(namespace, source, destination):
         forced=False, hi=False, video_path='video.mp4', from_lang='en', orig_to_lang='zh')
 
 
-def test_wraps_chinese_at_punctuation_and_parses_fenced_json():
+def test_wraps_chinese_at_punctuation_and_parses_numbered_output():
     namespace = load_translation_namespace(translator_settings())
     wrapped = namespace['wrap_translation']('这是一句比较长的中文字幕，需要在合适的位置自动断句。', width=12)
     assert r'\N' in wrapped
     assert wrapped.replace(r'\N', '') == '这是一句比较长的中文字幕，需要在合适的位置自动断句。'
-    assert namespace['_extract_json']('```json\n{"translations": []}\n```') == {'translations': []}
+    assert namespace['_extract_numbered']('```text\n[2] 你好\n[3] 再见\n```', [2, 3]) == {
+        2: '你好', 3: '再见'}
 
 
 def test_context_batches_and_bilingual_output_preserve_cue_timing(tmp_path):
@@ -77,7 +79,8 @@ def test_context_batches_and_bilingual_output_preserve_cue_timing(tmp_path):
     assert r'\N' in result[0].text
     assert [len(batch[0]) for batch in batches] == [2, 2, 1]
     assert [item['index'] for item in batches[1][1]] == [1, 2, 3, 4]
-    assert [item['translate'] for item in batches[1][1]] == [False, True, True, False]
+    assert batches[1][1][0]['translation'] == '这是结合前后文翻译后的自然中文句子。'
+    assert batches[1][1][-1]['translation'] is None
 
 
 def test_request_bounds_model_output_and_validates_indices():
@@ -91,15 +94,18 @@ def test_request_bounds_model_output_and_validates_indices():
         @staticmethod
         def json():
             return {'choices': [{'message': {'content':
-                    '{"translations":[{"index":0,"translation":"你好"}]}'}}]}
+                    '[0] 你好'}}]}
     def post(url, **kwargs):
         captured.update(url=url, **kwargs)
         return Response()
     namespace['requests'] = SimpleNamespace(post=post, RequestException=Exception)
     service = make_service(namespace, 'source.srt', 'translated.srt')
     target = [{'index': 0, 'content': 'Hello'}]
-    assert service._request(target, [dict(target[0], translate=True)], '') == {0: '你好'}
+    assert service._request(target, [target[0]], '') == {0: '你好'}
     assert captured['json']['max_tokens'] == 512
+    assert captured['json']['temperature'] == 0
+    assert captured['json']['messages'][0]['role'] == 'user'
+    assert 'Never add unstated specifications' in captured['json']['messages'][0]['content']
     assert captured['timeout'] == 300
 
 
