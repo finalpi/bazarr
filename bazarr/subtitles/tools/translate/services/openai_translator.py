@@ -27,10 +27,15 @@ def _plain(text):
 
 
 def wrap_translation(text, width=28):
-    """Balance Chinese lines while preferring punctuation and clause boundaries."""
-    text = _plain(text)
+    """Use a valid model-supplied break, or find a local clause boundary as fallback."""
+    marked_parts = re.split(r'\s*<br\s*/?>\s*', text, flags=re.I)
+    text = _plain(''.join(marked_parts))
     if len(text) <= width:
         return text
+    if len(marked_parts) == 2:
+        marked_lines = [_plain(part) for part in marked_parts]
+        if all(marked_lines) and all(len(line) <= width + 6 for line in marked_lines):
+            return r'\N'.join(marked_lines)
     line_count = int((len(text) + width - 1) / width)
     no_start = '，。！？；：、”’》）】'
     no_end = '“‘《（【'
@@ -203,8 +208,9 @@ class OpenAICompatibleTranslatorService:
             '7. Preserve interruptions, hesitation and unfinished sentences with Chinese ellipses.\n'
             '8. Retain separate leading dashes when a cue contains multiple speakers.\n'
             '9. Preserve wordplay, catchphrases, cultural references and invented words with a concise Chinese adaptation; never flatten them into a generic meaning.\n'
-            '10. Return every requested [number] exactly once and on one line.\n'
-            '11. Output numbered translations only, without Markdown, explanations or source text.\n\n'
+            '10. Keep translations of 28 Chinese full-width characters or fewer on one line. For a longer translation, insert exactly one literal <br> at a natural clause boundary; never split a word, name or fixed phrase.\n'
+            '11. Return every requested [number] exactly once and on one physical line; <br> is the only allowed line-break marker.\n'
+            '12. Output numbered translations only, without Markdown, explanations or source text.\n\n'
             'Media context:\n%s\n\n'
             'Surrounding context (understand only; do not output these numbers):\n%s\n\n'
             'Subtitles to translate:\n%s'
