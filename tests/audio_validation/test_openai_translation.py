@@ -54,8 +54,15 @@ def test_wraps_chinese_at_punctuation_and_parses_numbered_output():
     wrapped = namespace['wrap_translation']('这是一句比较长的中文字幕，需要在合适的位置自动断句。', width=12)
     assert r'\N' in wrapped
     assert wrapped.replace(r'\N', '') == '这是一句比较长的中文字幕，需要在合适的位置自动断句。'
+    quoted = namespace['wrap_translation']('看来大学生们已经不再喜欢我的“胡志鳅”角色了。', width=18)
+    assert not any(line.startswith(tuple('，。！？；：、”’》）】')) for line in quoted.split(r'\N'))
+    assert not any(line.endswith(tuple('“‘《（【')) for line in quoted.split(r'\N'))
     assert namespace['_extract_numbered']('```text\n[2] 你好\n[3] 再见\n```', [2, 3]) == {
         2: '你好', 3: '再见'}
+    assert namespace['_extract_numbered']('2. 你好\n3) 再见', [2, 3]) == {
+        2: '你好', 3: '再见'}
+    assert namespace['_extract_numbered']('1. 二十\n2. 二十一', [20, 21]) == {
+        20: '二十', 21: '二十一'}
 
 
 def test_context_batches_and_bilingual_output_preserve_cue_timing(tmp_path):

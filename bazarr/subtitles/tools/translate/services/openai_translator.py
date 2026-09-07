@@ -27,26 +27,30 @@ def _plain(text):
 
 
 def wrap_translation(text, width=18):
-    """Break translated text at sentence boundaries without changing cue timing."""
+    """Balance Chinese lines without leaving punctuation at a line boundary."""
     text = _plain(text)
     if len(text) <= width:
         return text
-    pieces = [piece for piece in re.split(r'(?<=[。！？；，、：])', text) if piece]
+    line_count = int((len(text) + width - 1) / width)
+    no_start = '，。！？；：、”’》）】'
+    no_end = '“‘《（【'
     lines = []
-    current = ''
-    for piece in pieces:
-        if current and len(current) + len(piece) > width:
-            lines.append(current)
-            current = ''
-        while len(piece) > width:
-            room = width - len(current)
-            current += piece[:room]
-            lines.append(current)
-            current = ''
-            piece = piece[room:]
-        current += piece
-    if current:
-        lines.append(current)
+    start = 0
+    for remaining_lines in range(line_count, 1, -1):
+        remaining = len(text) - start
+        target = start + int(round(remaining / remaining_lines))
+        lower = max(start + 1, target - 4)
+        upper = min(len(text) - (remaining_lines - 1), target + 4)
+        punctuation_breaks = [index for index in range(lower, upper + 1)
+                              if text[index - 1] in '，。！？；：、 ' and text[index] not in no_start]
+        end = min(punctuation_breaks, key=lambda index: abs(index - target)) if punctuation_breaks else target
+        while end < len(text) and text[end] in no_start:
+            end += 1
+        while end > start + 1 and text[end - 1] in no_end:
+            end -= 1
+        lines.append(text[start:end].strip())
+        start = end
+    lines.append(text[start:].strip())
     return r'\N'.join(lines)
 
 
@@ -55,18 +59,27 @@ def _extract_numbered(content, target_ids):
     if content.startswith('```'):
         content = re.sub(r'^```(?:text)?\s*|\s*```$', '', content, flags=re.I | re.S)
     requested = set(target_ids)
-    result = {}
+    items = []
+    seen = set()
     for line in content.splitlines():
-        match = re.match(r'^\s*\[(\d+)]\s*(.+?)\s*$', line)
+        match = re.match(r'^\s*(?:\[(\d+)]|(\d+)[.)、])\s*(.+?)\s*$', line)
         if not match:
             continue
-        index, translation = int(match.group(1)), match.group(2).strip()
-        if index in result or index not in requested or not translation:
+        index = int(match.group(1) or match.group(2))
+        translation = match.group(3).strip()
+        if index in seen or not translation:
             raise ValueError('Model returned invalid or duplicate subtitle indices')
-        result[index] = translation
-    if set(result) != requested:
-        raise ValueError('Model did not return every requested subtitle index')
-    return result
+        seen.add(index)
+        items.append((index, translation))
+    indices = [item[0] for item in items]
+    if set(indices) == requested and len(indices) == len(target_ids):
+        return dict(items)
+    relative = list(range(len(target_ids)))
+    one_based = list(range(1, len(target_ids) + 1))
+    shifted = [index + 1 for index in target_ids]
+    if len(items) == len(target_ids) and indices in (relative, one_based, shifted):
+        return {target: item[1] for target, item in zip(target_ids, items)}
+    raise ValueError('Model did not return every requested subtitle index')
 
 
 def _numbered(items, include_translation=False):
@@ -118,8 +131,9 @@ class OpenAICompatibleTranslatorService:
             '6. Never move information between cues or complete a sentence early. Each output must contain only information expressed in its matching source cue.\n'
             '7. Preserve interruptions, hesitation and unfinished sentences with Chinese ellipses.\n'
             '8. Retain separate leading dashes when a cue contains multiple speakers.\n'
-            '9. Return every requested [number] exactly once and on one line.\n'
-            '10. Output numbered translations only, without Markdown, explanations or source text.\n\n'
+            '9. Preserve wordplay, catchphrases, cultural references and invented words with a concise Chinese adaptation; never flatten them into a generic meaning.\n'
+            '10. Return every requested [number] exactly once and on one line.\n'
+            '11. Output numbered translations only, without Markdown, explanations or source text.\n\n'
             'Media context:\n%s\n\n'
             'Surrounding context (understand only; do not output these numbers):\n%s\n\n'
             'Subtitles to translate:\n%s'
