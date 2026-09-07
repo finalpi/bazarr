@@ -1,5 +1,5 @@
 import { FunctionComponent } from "react";
-import { ColorInput, SimpleGrid, Stack } from "@mantine/core";
+import { ColorInput, SimpleGrid, Stack, Title } from "@mantine/core";
 import { Check, CollapseBox, Number, Text } from "@/pages/Settings/components";
 import {
   useBaseInput,
@@ -7,15 +7,17 @@ import {
 } from "@/pages/Settings/utilities/hooks";
 import styles from "./LLMSubtitleAppearance.module.scss";
 
-const ColorSetting: FunctionComponent<{ label: string; settingKey: string }> = (
-  props,
-) => {
+const ColorSetting: FunctionComponent<{
+  label: string;
+  settingKey: string;
+  fallback?: string;
+}> = ({ fallback = "#FFFFFF", ...props }) => {
   const { value, update } = useBaseInput<{ label: string }, string>(props);
 
   return (
     <ColorInput
       label={props.label}
-      value={value ?? "#FFFFFF"}
+      value={value ?? fallback}
       format="hex"
       swatches={["#FFFFFF", "#FFE66D", "#7FDBFF", "#98FB98", "#000000"]}
       onChange={update}
@@ -24,32 +26,73 @@ const ColorSetting: FunctionComponent<{ label: string; settingKey: string }> = (
 };
 
 const LLMSubtitleAppearance: FunctionComponent = () => {
-  const fontName = useSettingValue<string>(
-    "settings-translator-openai_ass_font_name",
+  const chineseFontName = useSettingValue<string>(
+    "settings-translator-openai_ass_chinese_font_name",
   );
-  const fontSize = useSettingValue<number>(
-    "settings-translator-openai_ass_font_size",
+  const chineseFontSize = useSettingValue<number>(
+    "settings-translator-openai_ass_chinese_font_size",
   );
-  const primaryColor = useSettingValue<string>(
-    "settings-translator-openai_ass_primary_color",
+  const chineseColor = useSettingValue<string>(
+    "settings-translator-openai_ass_chinese_primary_color",
   );
-  const outlineColor = useSettingValue<string>(
-    "settings-translator-openai_ass_outline_color",
+  const chineseOutlineColor = useSettingValue<string>(
+    "settings-translator-openai_ass_chinese_outline_color",
   );
-  const bold = useSettingValue<boolean>("settings-translator-openai_ass_bold");
-  const outline = useSettingValue<number>(
-    "settings-translator-openai_ass_outline",
+  const chineseBold = useSettingValue<boolean>(
+    "settings-translator-openai_ass_chinese_bold",
   );
-  const shadow = useSettingValue<number>(
-    "settings-translator-openai_ass_shadow",
+  const chineseOutline = useSettingValue<number>(
+    "settings-translator-openai_ass_chinese_outline",
+  );
+  const chineseShadow = useSettingValue<number>(
+    "settings-translator-openai_ass_chinese_shadow",
+  );
+  const originalFontName = useSettingValue<string>(
+    "settings-translator-openai_ass_original_font_name",
+  );
+  const originalFontSize = useSettingValue<number>(
+    "settings-translator-openai_ass_original_font_size",
+  );
+  const originalColor = useSettingValue<string>(
+    "settings-translator-openai_ass_original_primary_color",
+  );
+  const originalOutlineColor = useSettingValue<string>(
+    "settings-translator-openai_ass_original_outline_color",
+  );
+  const originalBold = useSettingValue<boolean>(
+    "settings-translator-openai_ass_original_bold",
+  );
+  const originalOutline = useSettingValue<number>(
+    "settings-translator-openai_ass_original_outline",
+  );
+  const originalShadow = useSettingValue<number>(
+    "settings-translator-openai_ass_original_shadow",
   );
   const margin = useSettingValue<number>(
-    "settings-translator-openai_ass_margin_v",
+    "settings-translator-openai_ass_bilingual_margin_v",
   );
 
-  const previewSize = Math.max(16, Math.min(42, (fontSize ?? 52) * 0.55));
-  const stroke = Math.max(0, (outline ?? 3) * 0.65);
-  const shadowSize = Math.max(0, (shadow ?? 1) * 0.8);
+  const previewTextStyle = (
+    fontSize: number | null | undefined,
+    fontName: string | null | undefined,
+    color: string | null | undefined,
+    outlineColor: string | null | undefined,
+    bold: boolean | null | undefined,
+    outline: number | null | undefined,
+    shadow: number | null | undefined,
+    fallbackSize: number,
+    fallbackColor: string,
+  ) => ({
+    color: color ?? fallbackColor,
+    fontFamily: `${fontName || "sans-serif"}, sans-serif`,
+    fontSize: Math.max(14, Math.min(42, (fontSize ?? fallbackSize) * 0.55)),
+    fontWeight: bold ? 700 : 400,
+    WebkitTextStroke: `${Math.max(0, (outline ?? 0) * 0.65)}px ${outlineColor ?? "#000000"}`,
+    textShadow:
+      (shadow ?? 0) > 0
+        ? `${(shadow ?? 0) * 0.8}px ${(shadow ?? 0) * 0.8}px ${(shadow ?? 0) * 0.8}px ${outlineColor ?? "#000000"}`
+        : "none",
+  });
 
   return (
     <Stack gap="md">
@@ -63,64 +106,127 @@ const LLMSubtitleAppearance: FunctionComponent = () => {
           <div
             className={styles.caption}
             style={{
-              bottom: `${Math.max(4, Math.min(24, (margin ?? 54) / 8))}%`,
-              color: primaryColor ?? "#FFFFFF",
-              fontFamily: `${fontName || "Noto Sans CJK SC"}, sans-serif`,
-              fontSize: previewSize,
-              fontWeight: bold ? 700 : 400,
-              WebkitTextStroke: `${stroke}px ${outlineColor ?? "#000000"}`,
-              textShadow:
-                shadowSize > 0
-                  ? `${shadowSize}px ${shadowSize}px ${shadowSize}px ${outlineColor ?? "#000000"}`
-                  : "none",
+              bottom: `${Math.max(4, Math.min(24, (margin ?? 60) / 8))}%`,
             }}
           >
-            <span>We should leave before it gets dark.</span>
-            <span>我们应该趁天黑前离开。</span>
+            <span
+              style={previewTextStyle(
+                chineseFontSize,
+                chineseFontName,
+                chineseColor,
+                chineseOutlineColor,
+                chineseBold,
+                chineseOutline,
+                chineseShadow,
+                52,
+                "#FFE66D",
+              )}
+            >
+              我们应该趁天黑前离开。
+            </span>
+            <span
+              style={previewTextStyle(
+                originalFontSize,
+                originalFontName,
+                originalColor,
+                originalOutlineColor,
+                originalBold,
+                originalOutline,
+                originalShadow,
+                32,
+                "#FFFFFF",
+              )}
+            >
+              We should leave before it gets dark.
+            </span>
           </div>
         </div>
+
+        <Title order={4}>Chinese subtitle</Title>
         <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
           <Text
             label="Font family"
-            settingKey="settings-translator-openai_ass_font_name"
+            settingKey="settings-translator-openai_ass_chinese_font_name"
           />
           <Number
             label="Font size"
-            settingKey="settings-translator-openai_ass_font_size"
+            settingKey="settings-translator-openai_ass_chinese_font_size"
             min={12}
             max={120}
           />
           <ColorSetting
             label="Text color"
-            settingKey="settings-translator-openai_ass_primary_color"
+            settingKey="settings-translator-openai_ass_chinese_primary_color"
+            fallback="#FFE66D"
           />
           <ColorSetting
             label="Outline color"
-            settingKey="settings-translator-openai_ass_outline_color"
+            settingKey="settings-translator-openai_ass_chinese_outline_color"
+            fallback="#000000"
           />
           <Number
             label="Outline width"
-            settingKey="settings-translator-openai_ass_outline"
+            settingKey="settings-translator-openai_ass_chinese_outline"
             min={0}
             max={10}
           />
           <Number
             label="Shadow depth"
-            settingKey="settings-translator-openai_ass_shadow"
+            settingKey="settings-translator-openai_ass_chinese_shadow"
+            min={0}
+            max={10}
+          />
+          <Check
+            label="Bold text"
+            settingKey="settings-translator-openai_ass_chinese_bold"
+          />
+        </SimpleGrid>
+
+        <Title order={4}>Original subtitle</Title>
+        <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+          <Text
+            label="Font family"
+            settingKey="settings-translator-openai_ass_original_font_name"
+          />
+          <Number
+            label="Font size"
+            settingKey="settings-translator-openai_ass_original_font_size"
+            min={12}
+            max={120}
+          />
+          <ColorSetting
+            label="Text color"
+            settingKey="settings-translator-openai_ass_original_primary_color"
+          />
+          <ColorSetting
+            label="Outline color"
+            settingKey="settings-translator-openai_ass_original_outline_color"
+            fallback="#000000"
+          />
+          <Number
+            label="Outline width"
+            settingKey="settings-translator-openai_ass_original_outline"
             min={0}
             max={10}
           />
           <Number
-            label="Bottom margin"
-            settingKey="settings-translator-openai_ass_margin_v"
+            label="Shadow depth"
+            settingKey="settings-translator-openai_ass_original_shadow"
             min={0}
-            max={300}
+            max={10}
           />
           <Check
             label="Bold text"
-            settingKey="settings-translator-openai_ass_bold"
+            settingKey="settings-translator-openai_ass_original_bold"
           />
         </SimpleGrid>
+
+        <Number
+          label="Bottom margin"
+          settingKey="settings-translator-openai_ass_bilingual_margin_v"
+          min={0}
+          max={300}
+        />
       </CollapseBox>
     </Stack>
   );
