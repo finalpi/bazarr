@@ -26,7 +26,7 @@ def _plain(text):
     return re.sub(r'\s+', ' ', text.replace(r'\N', ' ').replace('\n', ' ')).strip()
 
 
-def wrap_translation(text, width=18):
+def wrap_translation(text, width=28):
     """Balance Chinese lines while preferring punctuation and clause boundaries."""
     text = _plain(text)
     if len(text) <= width:
