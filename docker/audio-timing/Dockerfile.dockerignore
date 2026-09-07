@@ -6,6 +6,10 @@
 !bazarr/subtitles/audio_validation.py
 !bazarr/subtitles/download.py
 !bazarr/subtitles/manual.py
+!bazarr/subtitles/tools/
+!bazarr/subtitles/tools/translate/
+!bazarr/subtitles/tools/translate/main.py
+!bazarr/subtitles/tools/translate/traditional.py
 !custom_libs/
 !custom_libs/subliminal_patch/
 !custom_libs/subliminal_patch/core.py

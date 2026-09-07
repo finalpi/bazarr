@@ -223,10 +223,10 @@ def _queue_missing_chinese_translation(video_path, source_path, source_language,
         else:
             item_id = metadata.radarrId
             existing = get_subtitles(radarr_id=item_id)
-        if any(item['code2'] in ('zh', 'zt') and
+        if any(item['code2'] == 'zh' and
                (item.get('embedded_track_id') is not None or
                 (item.get('path') and os.path.isfile(item['path']))) for item in existing):
-            logging.debug('BAZARR automatic translation skipped because Chinese subtitles already exist')
+            logging.debug('BAZARR automatic translation skipped because Simplified Chinese subtitles already exist')
             return False
 
         from subzero.language import Language

@@ -9,6 +9,7 @@ from subzero.language import Language
 
 from .core.translator_utils import validate_translation_params, convert_language_codes
 from .services.translator_factory import TranslatorFactory
+from .traditional import convert_simplified_file
 from languages.get_languages import alpha3_from_alpha2
 from app.config import settings
 from app.jobs_queue import jobs_queue
@@ -79,6 +80,20 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
         from api.subtitles.subtitles import postprocess_subtitles
         # Call postprocess_subtitles after translation
         postprocess_subtitles(dest_srt_file, media_type, metadata, sonarr_episode_id if media_type == 'episode' else radarr_id)
+        if to_lang == 'zh' and settings.translator.auto_translate_missing_chinese:
+            traditional_language, _ = convert_language_codes('zt', forced, hi)
+            traditional_path = get_subtitle_path(
+                video_path,
+                language=traditional_language if isinstance(traditional_language, Language)
+                else traditional_language.subzero_language(),
+                extension='.srt', forced_tag=forced, hi_tag=hi)
+            if dest_dir_for_srt:
+                traditional_path = os.path.join(dest_dir_for_srt, os.path.basename(traditional_path))
+            if not os.path.isfile(traditional_path):
+                convert_simplified_file(dest_srt_file, traditional_path)
+                postprocess_subtitles(traditional_path, media_type, metadata,
+                                      sonarr_episode_id if media_type == 'episode' else radarr_id)
+                logging.info('BAZARR generated Traditional Chinese locally from %s', dest_srt_file)
         return result
 
     except Exception as e:

@@ -151,3 +151,51 @@ def test_auto_translation_queues_only_when_chinese_is_missing(tmp_path, monkeypa
     assert not function('video.mp4', 'episode.en.srt', 'en', False, False, 'series', metadata)
     assert not queued
     assert not function('video.mp4', 'episode.en.srt', 'en', True, False, 'series', metadata)
+
+
+def test_traditional_chinese_does_not_block_simplified_translation(tmp_path, monkeypatch):
+    queued = []
+    settings = SimpleNamespace(translator=SimpleNamespace(auto_translate_missing_chinese=True))
+    metadata = SimpleNamespace(sonarrEpisodeId=22, sonarrSeriesId=1)
+    traditional = tmp_path / 'episode.zh-TW.srt'
+    traditional.write_text('existing', encoding='utf-8')
+    simplified = tmp_path / 'episode.zh.srt'
+    modules = {
+        'app.database': SimpleNamespace(get_subtitles=lambda **kwargs: [
+            {'code2': 'zt', 'embedded_track_id': None, 'path': str(traditional)}]),
+        'subzero.language': SimpleNamespace(Language=lambda code: code),
+        'subliminal_patch.core': SimpleNamespace(get_subtitle_path=lambda *args, **kwargs: str(simplified)),
+        'utilities.helper': SimpleNamespace(get_target_folder=lambda path: None),
+        'subtitles.tools.translate.main': SimpleNamespace(
+            translate_subtitles_file=lambda **kwargs: queued.append(kwargs)),
+    }
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    function = processing_function('_queue_missing_chinese_translation',
+                                   {'settings': settings, 'logging': logging, 'os': os})
+    assert function('video.mp4', 'episode.en.srt', 'en', False, False, 'series', metadata)
+    assert queued and queued[0]['to_lang'] == 'zh'
+
+
+def test_local_simplified_to_traditional_conversion_preserves_srt(tmp_path, monkeypatch):
+    source = ROOT / 'bazarr/subtitles/tools/translate/traditional.py'
+    tree = ast.parse(source.read_text(encoding='utf-8'))
+    namespace = {'os': os, 'Path': Path}
+    exec(compile(tree, str(source), 'exec'), namespace)
+
+    class FakeOpenCC:
+        def __init__(self, config):
+            assert config == 's2twp'
+
+        @staticmethod
+        def convert(text):
+            return text.replace('简体字幕', '繁體字幕')
+
+    monkeypatch.setitem(sys.modules, 'opencc', SimpleNamespace(OpenCC=FakeOpenCC))
+    source_file = tmp_path / 'episode.zh.srt'
+    destination = tmp_path / 'episode.zh-TW.srt'
+    content = '1\n00:00:01,000 --> 00:00:02,000\nEnglish\\N简体字幕\n'
+    source_file.write_text(content, encoding='utf-8')
+    assert namespace['convert_simplified_file'](source_file, destination) == str(destination)
+    assert destination.read_text(encoding='utf-8') == content.replace('简体字幕', '繁體字幕')
+    assert not list(tmp_path.glob('*.tmp'))
