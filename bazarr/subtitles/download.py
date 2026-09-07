@@ -15,7 +15,7 @@ from app.config import settings, get_array_from
 from app.database import TableEpisodes, TableMovies, TableShows, database, select, get_profiles_list, get_subtitles
 from utilities.path_mappings import path_mappings
 from utilities.helper import get_target_folder, force_unicode
-from languages.get_languages import alpha2_from_language, alpha3_from_alpha2
+from languages.get_languages import alpha2_from_alpha3, alpha2_from_language, alpha3_from_alpha2
 
 from .pool import update_pools, _get_pool
 from .utils import get_video, _get_lang_obj, _get_scores, _set_forced_providers
