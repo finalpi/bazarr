@@ -6,6 +6,11 @@
 !bazarr/subtitles/audio_validation.py
 !bazarr/subtitles/download.py
 !bazarr/subtitles/manual.py
+!bazarr/subtitles/embedded_translation.py
+!bazarr/subtitles/translation_priority.py
+!bazarr/subtitles/indexer/
+!bazarr/subtitles/indexer/series.py
+!bazarr/subtitles/indexer/movies.py
 !bazarr/subtitles/tools/
 !bazarr/subtitles/tools/translate/
 !bazarr/subtitles/tools/translate/main.py

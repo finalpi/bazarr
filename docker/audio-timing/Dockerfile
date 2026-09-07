@@ -7,7 +7,8 @@ LABEL org.opencontainers.image.source="https://github.com/finalpi/bazarr" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.description="Bazarr with an optional offline speech-timing filter"
 COPY bazarr/app/config.py /app/bazarr/bin/bazarr/app/config.py
-COPY bazarr/subtitles/audio_validation.py bazarr/subtitles/download.py bazarr/subtitles/manual.py bazarr/subtitles/processing.py /app/bazarr/bin/bazarr/subtitles/
+COPY bazarr/subtitles/audio_validation.py bazarr/subtitles/download.py bazarr/subtitles/manual.py bazarr/subtitles/processing.py bazarr/subtitles/embedded_translation.py bazarr/subtitles/translation_priority.py /app/bazarr/bin/bazarr/subtitles/
+COPY bazarr/subtitles/indexer/series.py bazarr/subtitles/indexer/movies.py /app/bazarr/bin/bazarr/subtitles/indexer/
 COPY bazarr/subtitles/tools/translate/main.py bazarr/subtitles/tools/translate/traditional.py /app/bazarr/bin/bazarr/subtitles/tools/translate/
 COPY bazarr/subtitles/tools/translate/services/translator_factory.py bazarr/subtitles/tools/translate/services/openai_translator.py /app/bazarr/bin/bazarr/subtitles/tools/translate/services/
 COPY custom_libs/subliminal_patch/core.py custom_libs/subliminal_patch/core_persistent.py /app/bazarr/bin/custom_libs/subliminal_patch/

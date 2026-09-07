@@ -17,6 +17,7 @@ from utilities.video_analyzer import embedded_subs_reader
 from app.event_handler import event_stream
 from subtitles.indexer.utils import guess_external_subtitles, get_external_subtitles_path
 from app.jobs_queue import jobs_queue
+from subtitles.translation_priority import counts_as_available_subtitle
 
 gc.enable()
 
@@ -268,8 +269,8 @@ def list_missing_subtitles(no=None, epno=None):
             # get existing subtitles
             actual_subtitles_list = []
             actual_subtitles_temp = get_subtitles(sonarr_episode_id=episode_subtitles.sonarrEpisodeId)
-            if not use_embedded_subs:
-                actual_subtitles_temp = [x for x in actual_subtitles_temp if x['path']]
+            actual_subtitles_temp = [x for x in actual_subtitles_temp
+                                     if counts_as_available_subtitle(x, use_embedded_subs)]
 
             for subtitles in actual_subtitles_temp:
                 actual_subtitles_list.append({'language': subtitles['code2'],

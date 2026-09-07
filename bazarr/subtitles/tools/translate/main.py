@@ -10,6 +10,7 @@ from subzero.language import Language
 from .core.translator_utils import validate_translation_params, convert_language_codes
 from .services.translator_factory import TranslatorFactory
 from .traditional import convert_simplified_file
+from subtitles.translation_priority import mark_as_llm_subtitle
 from languages.get_languages import alpha3_from_alpha2
 from app.config import settings
 from app.jobs_queue import jobs_queue
@@ -17,7 +18,8 @@ from utilities.helper import get_target_folder
 
 
 def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, forced, hi,
-                             media_type, sonarr_series_id, sonarr_episode_id, radarr_id, metadata, job_id=None):
+                             media_type, sonarr_series_id, sonarr_episode_id, radarr_id, metadata, job_id=None,
+                             low_priority=False):
     if not job_id:
         jobs_queue.add_job_from_function(f'Translating from {from_lang.upper()} to {to_lang.upper()} using '
                                          f'{settings.translator.translator_type.replace("_", " ").title()}',
@@ -38,8 +40,11 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
             language=lang_obj if isinstance(lang_obj, Language) else lang_obj.subzero_language(),
             extension='.srt',
             forced_tag=forced,
-            hi_tag=hi
+            hi_tag=hi and not low_priority,
         )
+        if low_priority:
+            dest_srt_file_if_alongside_video = mark_as_llm_subtitle(
+                dest_srt_file_if_alongside_video, video_path)
 
         # get the real destination path taking into account if the user set up Bazarr to store external subtitles in
         #  a custom folder or relative folder
@@ -86,7 +91,9 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
                 video_path,
                 language=traditional_language if isinstance(traditional_language, Language)
                 else traditional_language.subzero_language(),
-                extension='.srt', forced_tag=forced, hi_tag=hi)
+                extension='.srt', forced_tag=forced, hi_tag=hi and not low_priority)
+            if low_priority:
+                traditional_path = mark_as_llm_subtitle(traditional_path, video_path)
             if dest_dir_for_srt:
                 traditional_path = os.path.join(dest_dir_for_srt, os.path.basename(traditional_path))
             convert_simplified_file(dest_srt_file, traditional_path)

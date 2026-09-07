@@ -1,4 +1,5 @@
 import ast
+import importlib.util
 import json
 import logging
 import os
@@ -130,7 +131,9 @@ def test_auto_translation_queues_only_when_chinese_is_missing(tmp_path, monkeypa
     queued = []
     settings = SimpleNamespace(translator=SimpleNamespace(auto_translate_missing_chinese=True))
     metadata = SimpleNamespace(sonarrEpisodeId=22, sonarrSeriesId=1)
-    chinese = tmp_path / 'episode.zh.srt'
+    chinese = tmp_path / 'episode.llm.zh.srt'
+    english = tmp_path / 'episode.en.srt'
+    english.write_text('source', encoding='utf-8')
     modules = {
         'app.database': SimpleNamespace(get_subtitles=lambda **kwargs: []),
         'subzero.language': SimpleNamespace(Language=lambda code: code),
@@ -142,18 +145,21 @@ def test_auto_translation_queues_only_when_chinese_is_missing(tmp_path, monkeypa
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
     function = processing_function('_queue_missing_chinese_translation',
-                                   {'settings': settings, 'logging': logging, 'os': os})
-    assert function('video.mp4', 'episode.en.srt', 'en', False, False, 'series', metadata)
+                                   {'settings': settings, 'logging': logging, 'os': os,
+                                    'is_llm_subtitle': lambda path: '.llm.' in path,
+                                    'mark_as_llm_subtitle': lambda path, video: path})
+    assert function('video.mp4', str(english), 'en', False, 'series', metadata)
     assert queued[0]['to_lang'] == 'zh'
+    assert queued[0]['low_priority'] is True
     queued.clear()
     modules['app.database'].get_subtitles = lambda **kwargs: [
         {'code2': 'zh', 'embedded_track_id': 0, 'path': None}]
-    assert not function('video.mp4', 'episode.en.srt', 'en', False, False, 'series', metadata)
+    assert not function('video.mp4', str(english), 'en', False, 'series', metadata)
     assert not queued
-    assert not function('video.mp4', 'episode.en.srt', 'en', True, False, 'series', metadata)
+    assert not function('video.mp4', str(english), 'en', True, 'series', metadata)
 
 
-def test_traditional_chinese_does_not_block_simplified_translation(tmp_path, monkeypatch):
+def test_authoritative_traditional_chinese_blocks_llm_translation(tmp_path, monkeypatch):
     queued = []
     settings = SimpleNamespace(translator=SimpleNamespace(auto_translate_missing_chinese=True))
     metadata = SimpleNamespace(sonarrEpisodeId=22, sonarrSeriesId=1)
@@ -172,9 +178,84 @@ def test_traditional_chinese_does_not_block_simplified_translation(tmp_path, mon
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
     function = processing_function('_queue_missing_chinese_translation',
-                                   {'settings': settings, 'logging': logging, 'os': os})
-    assert function('video.mp4', 'episode.en.srt', 'en', False, False, 'series', metadata)
-    assert queued and queued[0]['to_lang'] == 'zh'
+                                   {'settings': settings, 'logging': logging, 'os': os,
+                                    'is_llm_subtitle': lambda path: '.llm.' in path,
+                                    'mark_as_llm_subtitle': lambda path, video: path})
+    assert not function('video.mp4', None, None, False, 'series', metadata)
+    assert not queued
+
+
+def test_embedded_chinese_blocks_llm_but_embedded_english_is_preferred(tmp_path, monkeypatch):
+    queued = []
+    settings = SimpleNamespace(translator=SimpleNamespace(auto_translate_missing_chinese=True))
+    metadata = SimpleNamespace(sonarrEpisodeId=22, sonarrSeriesId=1)
+    destination = tmp_path / 'episode.llm.zh.srt'
+    extracted = tmp_path / 'embedded.en.srt'
+    extracted.write_text('embedded source', encoding='utf-8')
+    current = {'items': [
+        {'code2': 'en', 'embedded_track_id': 4, 'forced': False, 'hi': False, 'path': None},
+    ]}
+    modules = {
+        'app.database': SimpleNamespace(get_subtitles=lambda **kwargs: current['items']),
+        'app.get_args': SimpleNamespace(args=SimpleNamespace(config_dir=str(tmp_path))),
+        'utilities.binaries': SimpleNamespace(get_binary=str),
+        'subtitles.embedded_translation': SimpleNamespace(
+            extract_embedded_subtitle=lambda *args: str(extracted)),
+        'subzero.language': SimpleNamespace(Language=lambda code: code),
+        'subliminal_patch.core': SimpleNamespace(get_subtitle_path=lambda *args, **kwargs: str(destination)),
+        'utilities.helper': SimpleNamespace(get_target_folder=lambda path: None),
+        'subtitles.tools.translate.main': SimpleNamespace(
+            translate_subtitles_file=lambda **kwargs: queued.append(kwargs)),
+    }
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    function = processing_function('_queue_missing_chinese_translation',
+                                   {'settings': settings, 'logging': logging, 'os': os,
+                                    'is_llm_subtitle': lambda path: '.llm.' in path,
+                                    'mark_as_llm_subtitle': lambda path, video: path})
+    assert function('video.mp4', None, None, False, 'series', metadata)
+    assert queued[0]['source_srt_file'] == str(extracted)
+    queued.clear()
+    current['items'].append(
+        {'code2': 'zt', 'embedded_track_id': 5, 'forced': False, 'hi': False, 'path': None})
+    assert not function('video.mp4', None, None, False, 'series', metadata)
+    assert not queued
+
+
+def test_llm_and_embedded_chinese_do_not_satisfy_external_chinese_search():
+    source = ROOT / 'bazarr/subtitles/translation_priority.py'
+    namespace = {'os': os}
+    exec(compile(ast.parse(source.read_text(encoding='utf-8')), str(source), 'exec'), namespace)
+    counts = namespace['counts_as_available_subtitle']
+    assert not counts({'path': 'episode.llm.zh.srt', 'code2': 'zh'}, True)
+    assert not counts({'path': None, 'code2': 'zh', 'embedded_track_id': 3}, True)
+    assert counts({'path': None, 'code2': 'en', 'embedded_track_id': 4}, True)
+    assert counts({'path': 'episode.zh.srt', 'code2': 'zh'}, True)
+    mark = namespace['mark_as_llm_subtitle']
+    assert mark('/media/episode.zh.srt', '/media/episode.mkv') == '/media/episode.llm.zh.srt'
+    assert mark('/media/episode.zh-TW.srt', '/media/episode.mkv') == '/media/episode.llm.zh-TW.srt'
+
+
+def test_embedded_subtitle_extraction_uses_selected_track_and_cache(tmp_path, monkeypatch):
+    source = ROOT / 'bazarr/subtitles/embedded_translation.py'
+    spec = importlib.util.spec_from_file_location('embedded_translation_test', source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    video = tmp_path / 'episode.mkv'
+    video.write_bytes(b'video')
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        Path(command[-1]).write_text(
+            '1\n00:00:01,000 --> 00:00:02,000\nEmbedded English subtitle\n', encoding='utf-8')
+
+    monkeypatch.setattr(module.subprocess, 'run', run)
+    first = module.extract_embedded_subtitle(video, 4, tmp_path / 'cache', lambda name: name)
+    second = module.extract_embedded_subtitle(video, 4, tmp_path / 'cache', lambda name: name)
+    assert first == second
+    assert len(commands) == 1
+    assert commands[0][commands[0].index('-map') + 1] == '0:4'
 
 
 def test_local_simplified_to_traditional_conversion_preserves_srt(tmp_path, monkeypatch):

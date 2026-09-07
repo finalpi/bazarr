@@ -20,6 +20,7 @@ from app.event_handler import event_stream
 from .utils import _get_download_code3
 from .post_processing import postprocessing
 from .utils import _get_scores
+from .translation_priority import is_llm_subtitle, mark_as_llm_subtitle
 
 
 class ProcessSubtitlesResult:
@@ -188,15 +189,12 @@ def process_subtitle(subtitle, media_type, audio_language, path, max_score, is_u
 
     event_tracker.track_subtitles(provider=downloaded_provider, action=action, language=downloaded_language)
 
-    _queue_missing_chinese_translation(
-        video_path=path,
-        source_path=downloaded_path,
-        source_language=downloaded_language_code2,
-        forced=subtitle.language.forced,
-        hi=subtitle.language.hi,
-        media_type=media_type,
-        metadata=episode_metadata if media_type == 'series' else movie_metadata,
-    )
+    if is_manual:
+        _queue_missing_chinese_translation(
+            video_path=path, source_path=downloaded_path,
+            source_language=downloaded_language_code2, forced=subtitle.language.forced,
+            media_type=media_type,
+            metadata=episode_metadata if media_type == 'series' else movie_metadata)
 
     return ProcessSubtitlesResult(message=message,
                                   reversed_path=reversed_path,
@@ -211,42 +209,87 @@ def process_subtitle(subtitle, media_type, audio_language, path, max_score, is_u
                                   not_matched=_get_not_matched(subtitle, media_type)),
 
 
-def _queue_missing_chinese_translation(video_path, source_path, source_language, forced, hi, media_type, metadata):
-    """Queue one English-to-Chinese translation when no usable Chinese subtitle exists."""
-    if not settings.translator.auto_translate_missing_chinese or source_language != 'en' or forced:
+def _queue_missing_chinese_translation(video_path, source_path=None, source_language=None, forced=False,
+                                       media_type='series', metadata=None):
+    """Queue a low-priority translation, preferring an embedded English stream."""
+    if not settings.translator.auto_translate_missing_chinese or forced:
         return False
     try:
         from app.database import get_subtitles
+        if metadata is None:
+            if media_type == 'series':
+                metadata = database.execute(
+                    select(TableEpisodes.sonarrSeriesId, TableEpisodes.sonarrEpisodeId)
+                    .where(TableEpisodes.path == path_mappings.path_replace_reverse(video_path))).first()
+            else:
+                metadata = database.execute(
+                    select(TableMovies.radarrId)
+                    .where(TableMovies.path == path_mappings.path_replace_reverse_movie(video_path))).first()
+            if metadata is None:
+                return False
         if media_type == 'series':
             item_id = metadata.sonarrEpisodeId
             existing = get_subtitles(sonarr_episode_id=item_id)
         else:
             item_id = metadata.radarrId
             existing = get_subtitles(radarr_id=item_id)
-        if any(item['code2'] == 'zh' and
-               (item.get('embedded_track_id') is not None or
-                (item.get('path') and os.path.isfile(item['path']))) for item in existing):
-            logging.debug('BAZARR automatic translation skipped because Simplified Chinese subtitles already exist')
+        authoritative_chinese = any(
+            item['code2'] in ('zh', 'zt') and
+            (item.get('embedded_track_id') is not None or
+             (item.get('path') and os.path.isfile(item['path']) and not is_llm_subtitle(item['path'])))
+            for item in existing)
+        if authoritative_chinese:
+            logging.debug('BAZARR automatic translation skipped because authoritative Chinese subtitles exist')
             return False
 
         from subzero.language import Language
         from subliminal_patch.core import get_subtitle_path
         from utilities.helper import get_target_folder
-        destination = get_subtitle_path(video_path, Language('zho'), extension='.srt', hi_tag=hi)
+        destination = mark_as_llm_subtitle(
+            get_subtitle_path(video_path, Language('zho'), extension='.srt'), video_path)
         target_folder = get_target_folder(video_path)
         if target_folder:
             destination = os.path.join(target_folder, os.path.basename(destination))
-        if os.path.isfile(destination):
+        if os.path.isfile(destination) or any(item.get('path') and is_llm_subtitle(item['path']) and
+                                              os.path.isfile(item['path']) for item in existing):
             logging.debug('BAZARR automatic translation skipped because destination already exists: %s', destination)
+            return False
+
+        embedded_english = sorted(
+            (item for item in existing if item['code2'] == 'en' and
+             item.get('embedded_track_id') is not None and not item.get('forced')),
+            key=lambda item: bool(item.get('hi')))
+        if embedded_english:
+            try:
+                from app.get_args import args
+                from utilities.binaries import get_binary
+                from subtitles.embedded_translation import extract_embedded_subtitle
+                source_path = extract_embedded_subtitle(
+                    video_path, embedded_english[0]['embedded_track_id'],
+                    os.path.join(args.config_dir, 'cache', 'embedded-translation'), get_binary)
+                source_language = 'en'
+            except Exception:
+                logging.exception('BAZARR unable to extract preferred embedded English subtitles')
+
+        if source_language != 'en' or not source_path or not os.path.isfile(source_path):
+            external_english = next(
+                (item for item in existing if item['code2'] == 'en' and item.get('path') and
+                 os.path.isfile(item['path']) and not item.get('forced') and
+                 not is_llm_subtitle(item['path'])), None)
+            if external_english:
+                source_path = external_english['path']
+                source_language = 'en'
+        if source_language != 'en' or not source_path or not os.path.isfile(source_path):
+            logging.debug('BAZARR automatic translation skipped because no English subtitle source exists')
             return False
 
         from subtitles.tools.translate.main import translate_subtitles_file
         translate_subtitles_file(
             video_path=video_path, source_srt_file=source_path, from_lang='en', to_lang='zh',
-            forced=False, hi=hi, media_type='episode' if media_type == 'series' else 'movie',
+            forced=False, hi=False, media_type='episode' if media_type == 'series' else 'movie',
             sonarr_series_id=metadata.sonarrSeriesId if media_type == 'series' else None,
             sonarr_episode_id=item_id if media_type == 'series' else None,
-            radarr_id=item_id if media_type != 'series' else None, metadata=metadata)
+            radarr_id=item_id if media_type != 'series' else None, metadata=metadata, low_priority=True)
         logging.info('BAZARR queued automatic English-to-Chinese subtitle translation for %s', video_path)
         return True
     except Exception:
