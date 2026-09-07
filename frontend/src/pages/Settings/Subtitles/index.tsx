@@ -746,8 +746,12 @@ const SettingsSubtitlesView: FunctionComponent = () => {
           />
         </CollapseBox>
         <Check
-          label="Automatically translate English when Chinese subtitles are missing"
+          label="Automatically translate source subtitles when Chinese subtitles are missing"
           settingKey="settings-translator-auto_translate_missing_chinese"
+        />
+        <Check
+          label="Download the original-language subtitle when no embedded track is available"
+          settingKey="settings-translator-auto_download_original_language"
         />
         <Check
           label="Add translation info at the beginning"

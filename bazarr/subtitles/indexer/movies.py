@@ -6,11 +6,12 @@ import logging
 import ast
 
 from subliminal_patch import core, search_external_subtitles
+from subzero.language import Language
 
 from languages.custom_lang import CustomLanguage
 from app.database import get_profiles_list, get_profile_cutoff, TableMovies, get_audio_profile_languages, database, \
     update, select, TableMoviesSubtitles, get_subtitles, delete, insert
-from languages.get_languages import alpha2_from_alpha3, get_language_set
+from languages.get_languages import alpha2_from_alpha3, alpha3_from_language, get_language_set
 from app.config import settings
 from utilities.helper import get_subtitle_destination_folder
 from utilities.path_mappings import path_mappings
@@ -28,7 +29,8 @@ def store_subtitles_movie(radarr_id, use_cache=True):
         select(TableMovies.radarrId,
                TableMovies.path,
                TableMovies.movie_file_id,
-               TableMovies.file_size)
+               TableMovies.file_size,
+               TableMovies.originalLanguage)
         .where(TableMovies.radarrId == radarr_id)
     ).first()
 
@@ -139,7 +141,12 @@ def store_subtitles_movie(radarr_id, use_cache=True):
                     .where(TableMoviesSubtitles.path.in_(previously_indexed_subtitles_to_delete)))
 
             # Search for external subtitles:
-            subtitles = search_external_subtitles(mapped_path, languages=get_language_set(),
+            indexed_languages = get_language_set()
+            if settings.translator.auto_download_original_language:
+                original_code3 = alpha3_from_language(item.originalLanguage)
+                if original_code3:
+                    indexed_languages.add(Language(original_code3))
+            subtitles = search_external_subtitles(mapped_path, languages=indexed_languages,
                                                   only_one=settings.general.single_language)
             full_dest_folder_path = os.path.dirname(mapped_path)
             if dest_folder:

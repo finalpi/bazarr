@@ -12,15 +12,38 @@ from subliminal_patch.core import save_subtitles
 from subliminal_patch.core_persistent import download_best_subtitles
 
 from app.config import settings, get_array_from
-from app.database import TableEpisodes, TableMovies, database, select, get_profiles_list
+from app.database import TableEpisodes, TableMovies, TableShows, database, select, get_profiles_list, get_subtitles
 from utilities.path_mappings import path_mappings
 from utilities.helper import get_target_folder, force_unicode
-from languages.get_languages import alpha3_from_alpha2
+from languages.get_languages import alpha2_from_language, alpha3_from_alpha2
 
 from .pool import update_pools, _get_pool
 from .utils import get_video, _get_lang_obj, _get_scores, _set_forced_providers
 from .processing import process_subtitle, _queue_missing_chinese_translation
 from .audio_validation import validate_download
+from .translation_priority import append_original_language
+
+
+def _add_original_language_download(path, media_type, languages):
+    if not settings.translator.auto_download_original_language or settings.general.single_language:
+        return list(languages), None
+    try:
+        if media_type == 'series':
+            item = database.execute(
+                select(TableShows.originalLanguage, TableEpisodes.sonarrEpisodeId)
+                .select_from(TableEpisodes).join(TableShows)
+                .where(TableEpisodes.path == path_mappings.path_replace_reverse(path))).first()
+            existing = get_subtitles(sonarr_episode_id=item.sonarrEpisodeId) if item else []
+        else:
+            item = database.execute(
+                select(TableMovies.originalLanguage, TableMovies.radarrId)
+                .where(TableMovies.path == path_mappings.path_replace_reverse_movie(path))).first()
+            existing = get_subtitles(radarr_id=item.radarrId) if item else []
+        original_code2 = alpha2_from_language(item.originalLanguage) if item else None
+        return append_original_language(languages, original_code2, existing)
+    except Exception:
+        logging.exception('BAZARR unable to add an original-language subtitle search for %s', path)
+        return list(languages), None
 
 
 @update_pools
@@ -29,6 +52,9 @@ def generate_subtitles(path, languages, audio_language, sceneName, title, media_
                        previous_subtitles_to_delete=None, job_id=None, fallback_allowed=False):
     if not languages:
         return None
+
+    languages, supplemental_original = _add_original_language_download(path, media_type, languages)
+    supplemental_original_code2 = supplemental_original[0] if supplemental_original else None
 
     logging.debug(f'BAZARR Searching subtitles for this file: {path}')
 
@@ -61,13 +87,16 @@ def generate_subtitles(path, languages, audio_language, sceneName, title, media_
 
         subz_mods = get_array_from(settings.general.subzero_mods)
         saved_any = False
+        translation_source_path = translation_source_language = None
 
         if providers:
             if forced_minimum_score:
                 min_score = int(forced_minimum_score) + 1
             for language in language_set:
+                current_language = alpha2_from_alpha3(language.alpha3)
                 # confirm if language is still missing or if cutoff has been reached
-                if check_if_still_required and language not in check_missing_languages(path, media_type):
+                if check_if_still_required and current_language != supplemental_original_code2 and \
+                        language not in check_missing_languages(path, media_type):
                     # cutoff has been reached
                     logging.debug(f"BAZARR this language ({parse_language_object(language)}) is ignored because cutoff "
                                   f"has been reached during this search.")
@@ -134,6 +163,10 @@ def generate_subtitles(path, languages, audio_language, sceneName, title, media_
                                 if not processed_subtitle:
                                     logging.debug(f"BAZARR unable to process this subtitles: {subtitle}")
                                     continue
+                                if current_language == 'en' or current_language == supplemental_original_code2:
+                                    if current_language != 'en' or translation_source_path is None:
+                                        translation_source_path = subtitle.storage_path
+                                        translation_source_language = current_language
                                 yield processed_subtitle
         else:
             logging.info("BAZARR All providers are throttled")
@@ -145,7 +178,9 @@ def generate_subtitles(path, languages, audio_language, sceneName, title, media_
             _queue_missing_chinese_translation(video_path=path, media_type=media_type)
             return None
 
-        _queue_missing_chinese_translation(video_path=path, media_type=media_type)
+        _queue_missing_chinese_translation(
+            video_path=path, source_path=translation_source_path,
+            source_language=translation_source_language, media_type=media_type)
 
     subliminal.region.backend.sync()
 

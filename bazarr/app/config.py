@@ -219,6 +219,7 @@ validators = [
     Validator('translator.openai_timeout', must_exist=True, default=300, is_type_of=int, gte=10, lte=1800),
     Validator('translator.openai_bilingual', must_exist=True, default=True, is_type_of=bool),
     Validator('translator.auto_translate_missing_chinese', must_exist=True, default=False, is_type_of=bool),
+    Validator('translator.auto_download_original_language', must_exist=True, default=False, is_type_of=bool),
 
     # sonarr section
     Validator('sonarr.ip', must_exist=True, default='127.0.0.1', is_type_of=str),

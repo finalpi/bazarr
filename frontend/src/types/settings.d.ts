@@ -200,6 +200,7 @@ declare namespace Settings {
     openai_timeout: number;
     openai_bilingual: boolean;
     auto_translate_missing_chinese: boolean;
+    auto_download_original_language: boolean;
     translator_info: boolean;
     translator_type: string;
   }

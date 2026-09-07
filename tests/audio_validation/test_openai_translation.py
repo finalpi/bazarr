@@ -236,6 +236,56 @@ def test_llm_and_embedded_chinese_do_not_satisfy_external_chinese_search():
     assert mark('/media/episode.zh-TW.srt', '/media/episode.mkv') == '/media/episode.llm.zh-TW.srt'
 
 
+def test_original_language_search_is_added_only_without_an_existing_source():
+    source = ROOT / 'bazarr/subtitles/translation_priority.py'
+    namespace = {'os': os}
+    exec(compile(ast.parse(source.read_text(encoding='utf-8')), str(source), 'exec'), namespace)
+    append = namespace['append_original_language']
+    languages, supplemental = append([('zh', 'False', 'False')], 'ja', [])
+    assert languages == [('zh', 'False', 'False'), ('ja', 'False', 'False')]
+    assert supplemental == ('ja', 'False', 'False')
+    for existing in (
+            [{'code2': 'ja', 'embedded_track_id': 3, 'forced': False, 'path': None}],
+            [{'code2': 'ja', 'embedded_track_id': None, 'forced': False, 'path': 'episode.ja.srt'}]):
+        languages, supplemental = append([('zh', 'False', 'False')], 'ja', existing)
+        assert languages == [('zh', 'False', 'False')]
+        assert supplemental is None
+
+
+def test_original_language_translation_precedes_english(tmp_path, monkeypatch):
+    queued = []
+    settings = SimpleNamespace(translator=SimpleNamespace(auto_translate_missing_chinese=True))
+    metadata = SimpleNamespace(sonarrEpisodeId=22, sonarrSeriesId=1, originalLanguage='Japanese')
+    destination = tmp_path / 'episode.llm.zh.srt'
+    japanese = tmp_path / 'episode.ja.srt'
+    english = tmp_path / 'episode.en.srt'
+    japanese.write_text('Japanese source', encoding='utf-8')
+    english.write_text('English source', encoding='utf-8')
+    existing = [
+        {'code2': 'en', 'embedded_track_id': None, 'forced': False, 'path': str(english)},
+        {'code2': 'ja', 'embedded_track_id': None, 'forced': False, 'path': str(japanese)},
+    ]
+    modules = {
+        'app.database': SimpleNamespace(get_subtitles=lambda **kwargs: existing),
+        'languages.get_languages': SimpleNamespace(
+            alpha2_from_language=lambda name: {'Japanese': 'ja'}.get(name)),
+        'subzero.language': SimpleNamespace(Language=lambda code: code),
+        'subliminal_patch.core': SimpleNamespace(get_subtitle_path=lambda *args, **kwargs: str(destination)),
+        'utilities.helper': SimpleNamespace(get_target_folder=lambda path: None),
+        'subtitles.tools.translate.main': SimpleNamespace(
+            translate_subtitles_file=lambda **kwargs: queued.append(kwargs)),
+    }
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    function = processing_function('_queue_missing_chinese_translation',
+                                   {'settings': settings, 'logging': logging, 'os': os,
+                                    'is_llm_subtitle': lambda path: '.llm.' in path,
+                                    'mark_as_llm_subtitle': lambda path, video: path})
+    assert function('video.mp4', None, None, False, 'series', metadata)
+    assert queued[0]['source_srt_file'] == str(japanese)
+    assert queued[0]['from_lang'] == 'ja'
+
+
 def test_embedded_subtitle_extraction_uses_selected_track_and_cache(tmp_path, monkeypatch):
     source = ROOT / 'bazarr/subtitles/embedded_translation.py'
     spec = importlib.util.spec_from_file_location('embedded_translation_test', source)
