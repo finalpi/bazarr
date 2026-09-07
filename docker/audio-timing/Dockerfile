@@ -1,6 +1,6 @@
 # Build the frontend first: cd frontend && npm ci --ignore-scripts && npm run build
 # Then, from the repository root:
-# docker build -f docker/audio-timing/Dockerfile -t finalpi/bazarr:audio-timing-v3 .
+# docker build -f docker/audio-timing/Dockerfile -t finalpi/bazarr:audio-timing-v4 .
 FROM lscr.io/linuxserver/bazarr@sha256:e464484e7e6cff8ee189036c9ba96977ab054104ea18067ecf6171d0f3f3f8f2
 ARG REVISION=local
 LABEL org.opencontainers.image.source="https://github.com/finalpi/bazarr" \

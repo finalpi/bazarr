@@ -24,6 +24,9 @@ after three failures no partial output is installed. Output is written to a
 temporary file and atomically moved into place only after the whole subtitle is
 translated.
 
+The request also applies a batch-sized output-token limit so verbose local models
+cannot generate indefinitely and block all later translation batches.
+
 The translator preserves cue timestamps and uses deterministic punctuation-aware
 line wrapping. Bilingual mode writes the original English followed by Chinese in
 each cue. It does not ask the model to invent or redistribute timestamps.

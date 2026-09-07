@@ -99,6 +99,8 @@ class OpenAICompatibleTranslatorService:
         payload = {
             'model': settings.translator.openai_model,
             'temperature': 0.2,
+            # Bound verbose/reasoning-capable local models while leaving enough room per cue.
+            'max_tokens': max(512, min(8192, len(targets) * 128)),
             'messages': [
                 {'role': 'system', 'content': system},
                 {'role': 'user', 'content': json.dumps({'cues': context}, ensure_ascii=False)},
