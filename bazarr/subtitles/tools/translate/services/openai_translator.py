@@ -62,6 +62,36 @@ def wrap_translation(text, width=18):
     return r'\N'.join(lines)
 
 
+def _ass_color(value, fallback):
+    """Convert a web color to the RGBA value expected by pysubs2."""
+    match = re.fullmatch(r'#?([0-9a-fA-F]{6})', str(value).strip())
+    color = match.group(1) if match else fallback.lstrip('#')
+    return pysubs2.Color(*(int(color[index:index + 2], 16) for index in (0, 2, 4)))
+
+
+def apply_ass_style(subtitles):
+    subtitles.info['PlayResX'] = '1920'
+    subtitles.info['PlayResY'] = '1080'
+    subtitles.info['ScaledBorderAndShadow'] = 'yes'
+    subtitles.styles['LLM'] = pysubs2.SSAStyle(
+        fontname=str(settings.translator.openai_ass_font_name).strip() or 'Noto Sans CJK SC',
+        fontsize=int(settings.translator.openai_ass_font_size),
+        primarycolor=_ass_color(settings.translator.openai_ass_primary_color, '#FFFFFF'),
+        outlinecolor=_ass_color(settings.translator.openai_ass_outline_color, '#000000'),
+        backcolor=_ass_color(settings.translator.openai_ass_outline_color, '#000000'),
+        bold=bool(settings.translator.openai_ass_bold),
+        outline=int(settings.translator.openai_ass_outline),
+        shadow=int(settings.translator.openai_ass_shadow),
+        alignment=pysubs2.Alignment.BOTTOM_CENTER,
+        marginl=40,
+        marginr=40,
+        marginv=int(settings.translator.openai_ass_margin_v),
+    )
+    for cue in subtitles:
+        cue.style = 'LLM'
+    return subtitles
+
+
 def _extract_numbered(content, target_ids):
     content = content.strip()
     if content.startswith('```'):
@@ -201,14 +231,26 @@ class OpenAICompatibleTranslatorService:
         for index, cue in enumerate(subtitles):
             chinese = wrap_translation(translated[index]) if self.to_lang == 'zho' else translated[index]
             cue.text = originals[index] + r'\N' + chinese if bilingual else chinese
+        styled_ass = bool(settings.translator.openai_styled_ass)
+        if styled_ass:
+            if settings.translator.translator_info:
+                first_start = subtitles[0].start
+                info_end = min(first_start, 5000)
+                info_start = 1000 if info_end == 5000 else 0
+                subtitles.insert(0, pysubs2.SSAEvent(
+                    start=info_start,
+                    end=info_end,
+                    text='# Subtitles translated with %s # ' % settings.translator.openai_model,
+                ))
+            apply_ass_style(subtitles)
         temporary = self.dest_srt_file + '.tmp'
         try:
-            subtitles.save(temporary, format_='srt', encoding='utf-8')
+            subtitles.save(temporary, format_='ass' if styled_ass else 'srt', encoding='utf-8')
             os.replace(temporary, self.dest_srt_file)
         finally:
             if os.path.exists(temporary):
                 os.remove(temporary)
-        if settings.translator.translator_info:
+        if settings.translator.translator_info and not styled_ass:
             add_translator_info(self.dest_srt_file,
                                 '# Subtitles translated with %s # ' % settings.translator.openai_model)
         message = '%s subtitles translated to %s.' % (

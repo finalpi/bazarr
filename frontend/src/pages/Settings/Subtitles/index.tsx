@@ -18,6 +18,7 @@ import {
   SubzeroColorModification,
   SubzeroModification,
 } from "@/pages/Settings/utilities/modifications";
+import LLMSubtitleAppearance from "./LLMSubtitleAppearance";
 import {
   adaptiveSearchingDelayOption,
   adaptiveSearchingDeltaOption,
@@ -757,6 +758,9 @@ const SettingsSubtitlesView: FunctionComponent = () => {
           label="Add translation info at the beginning"
           settingKey="settings-translator-translator_info"
         ></Check>
+      </Section>
+      <Section header="LLM Subtitle Appearance">
+        <LLMSubtitleAppearance />
       </Section>
     </Layout>
   );

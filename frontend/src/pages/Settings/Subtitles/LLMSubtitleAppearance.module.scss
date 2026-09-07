@@ -1,0 +1,37 @@
+.preview {
+  position: relative;
+  width: min(100%, 780px);
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-sm);
+  background: url("/images/pwa-wide-series-overview.jpeg") center / cover
+    no-repeat;
+}
+
+.shade {
+  position: absolute;
+  inset: 58% 0 0;
+  background: rgb(0 0 0 / 38%);
+}
+
+.caption {
+  position: absolute;
+  right: 24px;
+  left: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.28;
+  text-align: center;
+  transition:
+    bottom 120ms ease,
+    color 120ms ease,
+    font-size 120ms ease;
+}
+
+.caption span {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}

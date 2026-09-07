@@ -199,6 +199,15 @@ declare namespace Settings {
     openai_context_lines: number;
     openai_timeout: number;
     openai_bilingual: boolean;
+    openai_styled_ass: boolean;
+    openai_ass_font_name: string;
+    openai_ass_font_size: number;
+    openai_ass_primary_color: string;
+    openai_ass_outline_color: string;
+    openai_ass_bold: boolean;
+    openai_ass_outline: number;
+    openai_ass_shadow: number;
+    openai_ass_margin_v: number;
     auto_translate_missing_chinese: boolean;
     auto_download_original_language: boolean;
     translator_info: boolean;

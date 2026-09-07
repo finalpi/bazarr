@@ -35,10 +35,12 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
         logging.debug(f'BAZARR is translating in {lang_obj} this subtitles {source_srt_file}')
 
         # get the destination path if the subtitles are alongside the video
+        translator_type = settings.translator.translator_type or 'google'
+        styled_ass = translator_type == 'openai_compatible' and settings.translator.openai_styled_ass
         dest_srt_file_if_alongside_video = get_subtitle_path(
             video_path,
             language=lang_obj if isinstance(lang_obj, Language) else lang_obj.subzero_language(),
-            extension='.srt',
+            extension='.ass' if styled_ass else '.srt',
             forced_tag=forced,
             hi_tag=hi and not low_priority,
         )
@@ -57,7 +59,6 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
             # otherwise, we just use the destination path as it is
             dest_srt_file = dest_srt_file_if_alongside_video
 
-        translator_type = settings.translator.translator_type or 'google'
         logging.debug(f'Using translator type: {translator_type}')
 
         translator = TranslatorFactory.create_translator(
@@ -91,7 +92,7 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
                 video_path,
                 language=traditional_language if isinstance(traditional_language, Language)
                 else traditional_language.subzero_language(),
-                extension='.srt', forced_tag=forced, hi_tag=hi and not low_priority)
+                extension='.ass' if styled_ass else '.srt', forced_tag=forced, hi_tag=hi and not low_priority)
             if low_priority:
                 traditional_path = mark_as_llm_subtitle(traditional_path, video_path)
             if dest_dir_for_srt:
