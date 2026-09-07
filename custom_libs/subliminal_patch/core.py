@@ -955,7 +955,8 @@ def _search_external_subtitles(path, languages=None, only_one=False, match_stric
         adv_tag = None
         if len(split_tag) > 1:
             adv_tag = split_tag[1].lower()
-            if adv_tag in ['forced', 'normal', 'default', 'embedded', 'embedded-forced', 'custom', 'hi', 'cc', 'sdh']:
+            if adv_tag in ['forced', 'normal', 'default', 'embedded', 'embedded-forced', 'custom', 'hi', 'cc', 'sdh',
+                           'llm']:
                 p_root = split_tag[0]
 
         forced = False
@@ -977,6 +978,8 @@ def _search_external_subtitles(path, languages=None, only_one=False, match_stric
         # remove possible language code for matching
         p_root_bare = ENDSWITH_LANGUAGECODE_RE.sub(
             lambda m: "" if str(m.group(1)).lower() in FULL_LANGUAGE_LIST else m.group(0), p_root)
+        if p_root_bare.lower().endswith('.llm'):
+            p_root_bare = p_root_bare[:-4]
 
         p_root_lower = p_root_bare.lower()
         # comparing to both unicode normalization forms to prevent broking stuff and improve indexing on some platforms.

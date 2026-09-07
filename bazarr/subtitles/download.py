@@ -19,7 +19,7 @@ from languages.get_languages import alpha3_from_alpha2
 
 from .pool import update_pools, _get_pool
 from .utils import get_video, _get_lang_obj, _get_scores, _set_forced_providers
-from .processing import process_subtitle
+from .processing import process_subtitle, _queue_missing_chinese_translation
 from .audio_validation import validate_download
 
 
@@ -84,6 +84,7 @@ def generate_subtitles(path, languages, audio_language, sceneName, title, media_
                                                                        subtitle_validator=validate_download)
                     except Exception as e:
                         logging.exception(f'BAZARR Error downloading Subtitles for this file {path}: {repr(e)}')
+                        _queue_missing_chinese_translation(video_path=path, media_type=media_type)
                         return None
 
                 if downloaded_subtitles:
@@ -136,11 +137,15 @@ def generate_subtitles(path, languages, audio_language, sceneName, title, media_
                                 yield processed_subtitle
         else:
             logging.info("BAZARR All providers are throttled")
+            _queue_missing_chinese_translation(video_path=path, media_type=media_type)
             return None
 
         if not saved_any:
             logging.debug(f'BAZARR No Subtitles were found for this file: {path}')
+            _queue_missing_chinese_translation(video_path=path, media_type=media_type)
             return None
+
+        _queue_missing_chinese_translation(video_path=path, media_type=media_type)
 
     subliminal.region.backend.sync()
 
