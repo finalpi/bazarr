@@ -45,7 +45,7 @@ def translator_settings(**overrides):
                   openai_ass_margin_v=54,
                   openai_ass_chinese_font_name='Noto Sans CJK SC',
                   openai_ass_chinese_font_size=52,
-                  openai_ass_chinese_primary_color='#FFE66D',
+                  openai_ass_chinese_primary_color='#FFFF80',
                   openai_ass_chinese_outline_color='#000000',
                   openai_ass_chinese_bold=True, openai_ass_chinese_outline=3,
                   openai_ass_chinese_shadow=0,

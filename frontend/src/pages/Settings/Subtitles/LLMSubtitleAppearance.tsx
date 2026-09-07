@@ -19,7 +19,7 @@ const ColorSetting: FunctionComponent<{
       label={props.label}
       value={value ?? fallback}
       format="hex"
-      swatches={["#FFFFFF", "#FFE66D", "#7FDBFF", "#98FB98", "#000000"]}
+      swatches={["#FFFFFF", "#FFFF80", "#FFE66D", "#7FDBFF", "#98FB98"]}
       onChange={update}
     />
   );
@@ -85,9 +85,10 @@ const LLMSubtitleAppearance: FunctionComponent = () => {
   ) => ({
     color: color ?? fallbackColor,
     fontFamily: `${fontName || "sans-serif"}, sans-serif`,
-    fontSize: Math.max(14, Math.min(42, (fontSize ?? fallbackSize) * 0.55)),
+    fontSize: Math.max(13, Math.min(38, (fontSize ?? fallbackSize) * 0.4)),
     fontWeight: bold ? 700 : 400,
-    WebkitTextStroke: `${Math.max(0, (outline ?? 0) * 0.65)}px ${outlineColor ?? "#000000"}`,
+    WebkitTextStroke: `${Math.max(0, (outline ?? 0) * 0.4)}px ${outlineColor ?? "#000000"}`,
+    paintOrder: "stroke fill",
     textShadow:
       (shadow ?? 0) > 0
         ? `${(shadow ?? 0) * 0.8}px ${(shadow ?? 0) * 0.8}px ${(shadow ?? 0) * 0.8}px ${outlineColor ?? "#000000"}`
@@ -119,7 +120,7 @@ const LLMSubtitleAppearance: FunctionComponent = () => {
                 chineseOutline,
                 chineseShadow,
                 52,
-                "#FFE66D",
+                "#FFFF80",
               )}
             >
               我们应该趁天黑前离开。
@@ -157,7 +158,7 @@ const LLMSubtitleAppearance: FunctionComponent = () => {
           <ColorSetting
             label="Text color"
             settingKey="settings-translator-openai_ass_chinese_primary_color"
-            fallback="#FFE66D"
+            fallback="#FFFF80"
           />
           <ColorSetting
             label="Outline color"

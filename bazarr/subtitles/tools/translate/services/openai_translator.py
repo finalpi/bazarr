@@ -94,7 +94,7 @@ def apply_ass_style(subtitles, bilingual=False):
     subtitles.info['Collisions'] = 'Reverse'
     margin = int(settings.translator.openai_ass_bilingual_margin_v)
     subtitles.styles['Chinese'] = _ass_style(
-        'openai_ass_chinese', 'Noto Sans CJK SC', '#FFE66D', margin)
+        'openai_ass_chinese', 'Noto Sans CJK SC', '#FFFF80', margin)
     subtitles.styles['Original'] = _ass_style(
         'openai_ass_original', 'Arial', '#FFFFFF', margin)
 

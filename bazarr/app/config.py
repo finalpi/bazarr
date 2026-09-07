@@ -229,7 +229,7 @@ validators = [
     Validator('translator.openai_ass_margin_v', must_exist=True, default=54, is_type_of=int, gte=0, lte=300),
     Validator('translator.openai_ass_chinese_font_name', must_exist=True, default='Noto Sans CJK SC', is_type_of=str, cast=str),
     Validator('translator.openai_ass_chinese_font_size', must_exist=True, default=52, is_type_of=int, gte=12, lte=120),
-    Validator('translator.openai_ass_chinese_primary_color', must_exist=True, default='#FFE66D', is_type_of=str, cast=str),
+    Validator('translator.openai_ass_chinese_primary_color', must_exist=True, default='#FFFF80', is_type_of=str, cast=str),
     Validator('translator.openai_ass_chinese_outline_color', must_exist=True, default='#000000', is_type_of=str, cast=str),
     Validator('translator.openai_ass_chinese_bold', must_exist=True, default=True, is_type_of=bool),
     Validator('translator.openai_ass_chinese_outline', must_exist=True, default=3, is_type_of=int, gte=0, lte=10),
