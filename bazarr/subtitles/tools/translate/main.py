@@ -89,11 +89,10 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
                 extension='.srt', forced_tag=forced, hi_tag=hi)
             if dest_dir_for_srt:
                 traditional_path = os.path.join(dest_dir_for_srt, os.path.basename(traditional_path))
-            if not os.path.isfile(traditional_path):
-                convert_simplified_file(dest_srt_file, traditional_path)
-                postprocess_subtitles(traditional_path, media_type, metadata,
-                                      sonarr_episode_id if media_type == 'episode' else radarr_id)
-                logging.info('BAZARR generated Traditional Chinese locally from %s', dest_srt_file)
+            convert_simplified_file(dest_srt_file, traditional_path)
+            postprocess_subtitles(traditional_path, media_type, metadata,
+                                  sonarr_episode_id if media_type == 'episode' else radarr_id)
+            logging.info('BAZARR generated Traditional Chinese locally from %s', dest_srt_file)
         return result
 
     except Exception as e:
