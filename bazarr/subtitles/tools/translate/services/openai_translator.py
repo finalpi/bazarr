@@ -44,6 +44,14 @@ def wrap_translation(text, width=18):
         punctuation_breaks = [index for index in range(lower, upper + 1)
                               if text[index - 1] in '，。！？；：、 ' and text[index] not in no_start]
         end = min(punctuation_breaks, key=lambda index: abs(index - target)) if punctuation_breaks else target
+        if (end < len(text) and text[end - 1].isascii() and text[end].isascii()
+                and text[end - 1].isalnum() and text[end].isalnum()):
+            word_start, word_end = end, end
+            while word_start > start and text[word_start - 1].isascii() and text[word_start - 1].isalnum():
+                word_start -= 1
+            while word_end < len(text) and text[word_end].isascii() and text[word_end].isalnum():
+                word_end += 1
+            end = word_start if word_start > start else word_end
         while end < len(text) and text[end] in no_start:
             end += 1
         while end > start + 1 and text[end - 1] in no_end:
