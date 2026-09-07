@@ -27,13 +27,15 @@ def _plain(text):
 
 
 def wrap_translation(text, width=18):
-    """Balance Chinese lines without leaving punctuation at a line boundary."""
+    """Balance Chinese lines while preferring punctuation and clause boundaries."""
     text = _plain(text)
     if len(text) <= width:
         return text
     line_count = int((len(text) + width - 1) / width)
     no_start = '，。！？；：、”’》）】'
     no_end = '“‘《（【'
+    clause_starts = ('但是', '不过', '然而', '所以', '因此', '而且', '如果', '虽然',
+                     '因为', '同时', '然后', '而', '但', '却')
     lines = []
     start = 0
     for remaining_lines in range(line_count, 1, -1):
@@ -43,7 +45,10 @@ def wrap_translation(text, width=18):
         upper = min(len(text) - (remaining_lines - 1), target + 4)
         punctuation_breaks = [index for index in range(lower, upper + 1)
                               if text[index - 1] in '，。！？；：、 ' and text[index] not in no_start]
-        end = min(punctuation_breaks, key=lambda index: abs(index - target)) if punctuation_breaks else target
+        clause_breaks = [index for index in range(lower, upper + 1)
+                         if any(text.startswith(word, index) for word in clause_starts)]
+        preferred_breaks = punctuation_breaks or clause_breaks
+        end = min(preferred_breaks, key=lambda index: abs(index - target)) if preferred_breaks else target
         if (end < len(text) and text[end - 1].isascii() and text[end].isascii()
                 and text[end - 1].isalnum() and text[end].isalnum()):
             word_start, word_end = end, end
