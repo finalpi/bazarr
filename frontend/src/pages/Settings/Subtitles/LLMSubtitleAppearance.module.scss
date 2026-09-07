@@ -5,8 +5,8 @@
   overflow: hidden;
   border: 1px solid var(--mantine-color-default-border);
   border-radius: var(--mantine-radius-sm);
-  background: url("/images/pwa-wide-series-overview.jpeg") center / cover
-    no-repeat;
+  background: url("/images/pwa-wide-series-overview.jpeg") center top / 180%
+    auto no-repeat;
 }
 
 .shade {
