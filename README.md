@@ -17,6 +17,8 @@
     <img src="https://img.shields.io/docker/pulls/linuxserver/bazarr.svg?style=flat-square" alt="Docker pulls - linuxserver"></a>
   <a href="https://hub.docker.com/r/hotio/bazarr/">
     <img src="https://img.shields.io/docker/pulls/hotio/bazarr.svg?style=flat-square" alt="Docker pulls - hotio"></a>
+  <a href="https://github.com/finalpi/bazarr/actions/workflows/docker-publish.yml">
+    <img src="https://github.com/finalpi/bazarr/actions/workflows/docker-publish.yml/badge.svg?branch=master" alt="Enhanced Docker image build"></a>
   <a href="https://discord.gg/MH2e2eb">
     <img src="https://img.shields.io/badge/discord-chat-MH2e2eb.svg?style=flat-square" alt="Discord"></a>
 </p>
@@ -27,14 +29,56 @@ Bazarr is a companion application to Sonarr and Radarr. It manages and downloads
 
 Bazarr does not scan your disk to detect series and movies. It only manages the series and movies that are indexed in Sonarr and Radarr.
 
+## Enhanced subtitle workflow in this fork
+
+The `master` branch and its Docker image extend Bazarr with a subtitle workflow designed for mixed-language TV and anime libraries:
+
+- Validate downloaded subtitles against speech timing before saving them. A failed subtitle is aligned first and then validated again; it is rejected when the aligned result still does not match.
+- Prefer a matching embedded subtitle track as the synchronization reference, with audio timing available as the fallback.
+- Extract embedded text subtitle tracks for translation. The work's original-language track is preferred, followed by English.
+- Download the original-language subtitle when no usable embedded or external source exists. Sonarr/Radarr `originalLanguage` metadata is used, so Japanese works request and retain `ja` subtitles.
+- Translate with Ollama or any OpenAI-compatible API using neighboring cues for context, balanced line breaking, bilingual output, and low-priority `.llm.<language>` filenames.
+- Translate Simplified Chinese once and create Traditional Chinese locally with OpenCC, avoiding a second LLM request.
+- Save LLM subtitles as styled ASS files and adjust the font, size, colors, outline, shadow, weight, and bottom margin with a live preview under **Settings > Subtitles > LLM Subtitle Appearance**.
+
+Provider subtitles remain authoritative. LLM subtitles are retained as a fallback and do not stop Bazarr from searching for a matching provider subtitle. Embedded Chinese prevents an unnecessary LLM translation, but it does not count as an external downloaded Chinese subtitle.
+
+Detailed behavior and benchmark notes are available in [audio timing filter](docs/audio-timing-filter.md), [audio timing benchmark](docs/audio-timing-benchmark.md), and [OpenAI-compatible translation](docs/openai-compatible-translation.md).
+
+## Enhanced Docker image
+
+Every push to `master` publishes a multi-platform image for `linux/amd64` and `linux/arm64` to GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/finalpi/bazarr:latest
+```
+
+Use it in an existing LinuxServer Bazarr Compose file by changing only the image:
+
+```yaml
+services:
+  bazarr:
+    image: ghcr.io/finalpi/bazarr:latest
+    container_name: bazarr
+    volumes:
+      - ./config:/config
+      - /path/to/tv:/tv
+      - /path/to/movies:/movies
+    ports:
+      - "6767:6767"
+    restart: unless-stopped
+```
+
+Available tags are `latest`, `master`, and `sha-<commit>`. Keep the existing `/config`, `/tv`, and `/movies` mappings when replacing another LinuxServer Bazarr image. The first workflow run creates the GHCR package; its visibility must be public for anonymous pulls.
+
 ## Links
 
-| Resource | Link |
-| --- | --- |
-| Documentation | [Wiki](https://wiki.bazarr.media) |
-| Support | [Discord](https://discord.gg/MH2e2eb) |
-| Bug reports | [GitHub Issues](https://github.com/morpheus65535/bazarr/issues) |
-| Feature requests | [Feature Upvote](http://features.bazarr.media) |
+| Resource         | Link                                                            |
+| ---------------- | --------------------------------------------------------------- |
+| Documentation    | [Wiki](https://wiki.bazarr.media)                               |
+| Support          | [Discord](https://discord.gg/MH2e2eb)                           |
+| Bug reports      | [GitHub Issues](https://github.com/morpheus65535/bazarr/issues) |
+| Feature requests | [Feature Upvote](http://features.bazarr.media)                  |
 
 ## Support the project
 
