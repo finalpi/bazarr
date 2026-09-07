@@ -192,6 +192,14 @@ declare namespace Settings {
     gemini_batch_size: number;
     lingarr_url: string;
     lingarr_token: string;
+    openai_base_url: string;
+    openai_api_key: string;
+    openai_model: string;
+    openai_batch_size: number;
+    openai_context_lines: number;
+    openai_timeout: number;
+    openai_bilingual: boolean;
+    auto_translate_missing_chinese: boolean;
     translator_info: boolean;
     translator_type: string;
   }

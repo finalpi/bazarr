@@ -211,6 +211,14 @@ validators = [
     Validator('translator.translator_type', must_exist=True, default='google_translate', is_type_of=str, cast=str),
     Validator('translator.lingarr_url', must_exist=True, default='http://lingarr:9876', is_type_of=str),
     Validator('translator.lingarr_token', must_exist=True, default='', is_type_of=str, cast=str),
+    Validator('translator.openai_base_url', must_exist=True, default='http://host.docker.internal:11434/v1', is_type_of=str),
+    Validator('translator.openai_api_key', must_exist=True, default='', is_type_of=str, cast=str),
+    Validator('translator.openai_model', must_exist=True, default='translategemma:12b', is_type_of=str, cast=str),
+    Validator('translator.openai_batch_size', must_exist=True, default=60, is_type_of=int, gte=1, lte=200),
+    Validator('translator.openai_context_lines', must_exist=True, default=6, is_type_of=int, gte=0, lte=20),
+    Validator('translator.openai_timeout', must_exist=True, default=300, is_type_of=int, gte=10, lte=1800),
+    Validator('translator.openai_bilingual', must_exist=True, default=True, is_type_of=bool),
+    Validator('translator.auto_translate_missing_chinese', must_exist=True, default=False, is_type_of=bool),
 
     # sonarr section
     Validator('sonarr.ip', must_exist=True, default='127.0.0.1', is_type_of=str),

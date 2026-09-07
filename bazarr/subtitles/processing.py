@@ -2,6 +2,7 @@
 # fmt: off
 
 import logging
+import os
 
 from app.config import settings, sync_checker as _defaul_sync_checker
 from utilities.path_mappings import path_mappings
@@ -187,6 +188,16 @@ def process_subtitle(subtitle, media_type, audio_language, path, max_score, is_u
 
     event_tracker.track_subtitles(provider=downloaded_provider, action=action, language=downloaded_language)
 
+    _queue_missing_chinese_translation(
+        video_path=path,
+        source_path=downloaded_path,
+        source_language=downloaded_language_code2,
+        forced=subtitle.language.forced,
+        hi=subtitle.language.hi,
+        media_type=media_type,
+        metadata=episode_metadata if media_type == 'series' else movie_metadata,
+    )
+
     return ProcessSubtitlesResult(message=message,
                                   reversed_path=reversed_path,
                                   downloaded_language_code2=downloaded_language_code2,
@@ -198,6 +209,49 @@ def process_subtitle(subtitle, media_type, audio_language, path, max_score, is_u
                                   hearing_impaired=subtitle.language.hi,
                                   matched=list(subtitle.matches or []),
                                   not_matched=_get_not_matched(subtitle, media_type)),
+
+
+def _queue_missing_chinese_translation(video_path, source_path, source_language, forced, hi, media_type, metadata):
+    """Queue one English-to-Chinese translation when no usable Chinese subtitle exists."""
+    if not settings.translator.auto_translate_missing_chinese or source_language != 'en' or forced:
+        return False
+    try:
+        from app.database import get_subtitles
+        if media_type == 'series':
+            item_id = metadata.sonarrEpisodeId
+            existing = get_subtitles(sonarr_episode_id=item_id)
+        else:
+            item_id = metadata.radarrId
+            existing = get_subtitles(radarr_id=item_id)
+        if any(item['code2'] in ('zh', 'zt') and
+               (item.get('embedded_track_id') is not None or
+                (item.get('path') and os.path.isfile(item['path']))) for item in existing):
+            logging.debug('BAZARR automatic translation skipped because Chinese subtitles already exist')
+            return False
+
+        from subzero.language import Language
+        from subliminal_patch.core import get_subtitle_path
+        from utilities.helper import get_target_folder
+        destination = get_subtitle_path(video_path, Language('zho'), extension='.srt', hi_tag=hi)
+        target_folder = get_target_folder(video_path)
+        if target_folder:
+            destination = os.path.join(target_folder, os.path.basename(destination))
+        if os.path.isfile(destination):
+            logging.debug('BAZARR automatic translation skipped because destination already exists: %s', destination)
+            return False
+
+        from subtitles.tools.translate.main import translate_subtitles_file
+        translate_subtitles_file(
+            video_path=video_path, source_srt_file=source_path, from_lang='en', to_lang='zh',
+            forced=False, hi=hi, media_type='episode' if media_type == 'series' else 'movie',
+            sonarr_series_id=metadata.sonarrSeriesId if media_type == 'series' else None,
+            sonarr_episode_id=item_id if media_type == 'series' else None,
+            radarr_id=item_id if media_type != 'series' else None, metadata=metadata)
+        logging.info('BAZARR queued automatic English-to-Chinese subtitle translation for %s', video_path)
+        return True
+    except Exception:
+        logging.exception('BAZARR unable to queue automatic subtitle translation for %s', video_path)
+        return False
 
 
 def _get_not_matched(subtitle, media_type):

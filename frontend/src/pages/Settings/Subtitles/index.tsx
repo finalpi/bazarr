@@ -8,6 +8,7 @@ import {
   Message,
   MultiSelector,
   Number,
+  Password,
   Section,
   Selector,
   Slider,
@@ -704,6 +705,50 @@ const SettingsSubtitlesView: FunctionComponent = () => {
             instance doesn't require authentication.
           </Message>
         </CollapseBox>
+        <CollapseBox
+          settingKey="settings-translator-translator_type"
+          on={(val) => val === "openai_compatible"}
+        >
+          <Text
+            label="OpenAI-compatible base URL"
+            settingKey="settings-translator-openai_base_url"
+          />
+          <Message>
+            Ollama on this Mac: http://host.docker.internal:11434/v1. OpenAI:
+            https://api.openai.com/v1.
+          </Message>
+          <Text label="Model" settingKey="settings-translator-openai_model" />
+          <Password
+            label="API key (optional for Ollama)"
+            settingKey="settings-translator-openai_api_key"
+          />
+          <Number
+            label="Lines per translation batch"
+            settingKey="settings-translator-openai_batch_size"
+            min={1}
+            max={200}
+          />
+          <Number
+            label="Neighboring context lines"
+            settingKey="settings-translator-openai_context_lines"
+            min={0}
+            max={20}
+          />
+          <Number
+            label="Request timeout (seconds)"
+            settingKey="settings-translator-openai_timeout"
+            min={10}
+            max={1800}
+          />
+          <Check
+            label="Keep English and Chinese as bilingual subtitles"
+            settingKey="settings-translator-openai_bilingual"
+          />
+        </CollapseBox>
+        <Check
+          label="Automatically translate English when Chinese subtitles are missing"
+          settingKey="settings-translator-auto_translate_missing_chinese"
+        />
         <Check
           label="Add translation info at the beginning"
           settingKey="settings-translator-translator_info"
