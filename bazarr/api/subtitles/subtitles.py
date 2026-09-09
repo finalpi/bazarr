@@ -213,25 +213,25 @@ def postprocess_subtitles(subtitles_path, media_type, metadata, id):
     if chmod:
         os.chmod(subtitles_path, chmod)
 
-        if media_type == 'episode':
-            store_subtitles(id)
-            event_stream(type='series', payload=metadata.sonarrSeriesId)
-            event_stream(type='episode', payload=id)
+    if media_type == 'episode':
+        store_subtitles(id)
+        event_stream(type='series', payload=metadata.sonarrSeriesId)
+        event_stream(type='episode', payload=id)
 
-            if settings.general.use_plex and settings.plex.update_series_library:
-                plex_refresh_item(metadata.imdbId, is_movie=False, season=metadata.season,
-                                  episode=metadata.episode)
-            if settings.general.use_jellyfin and settings.jellyfin.update_series_library:
-                jellyfin_refresh_item(metadata.imdbId, is_movie=False, season=metadata.season,
-                                      episode=metadata.episode, tvdb_id=metadata.tvdbId)
-        else:
-            store_subtitles_movie(id)
-            event_stream(type='movie', payload=id)
+        if settings.general.use_plex and settings.plex.update_series_library:
+            plex_refresh_item(metadata.imdbId, is_movie=False, season=metadata.season,
+                              episode=metadata.episode)
+        if settings.general.use_jellyfin and settings.jellyfin.update_series_library:
+            jellyfin_refresh_item(metadata.imdbId, is_movie=False, season=metadata.season,
+                                  episode=metadata.episode, tvdb_id=metadata.tvdbId)
+    else:
+        store_subtitles_movie(id)
+        event_stream(type='movie', payload=id)
 
-            if settings.general.use_plex and settings.plex.update_movie_library:
-                plex_refresh_item(metadata.imdbId, is_movie=True)
-            if settings.general.use_jellyfin and settings.jellyfin.update_movie_library:
-                jellyfin_refresh_item(metadata.imdbId, is_movie=True,
-                                      tmdb_id=metadata.tmdbId)
+        if settings.general.use_plex and settings.plex.update_movie_library:
+            plex_refresh_item(metadata.imdbId, is_movie=True)
+        if settings.general.use_jellyfin and settings.jellyfin.update_movie_library:
+            jellyfin_refresh_item(metadata.imdbId, is_movie=True,
+                                  tmdb_id=metadata.tmdbId)
 
-        return '', 204
+    return '', 204

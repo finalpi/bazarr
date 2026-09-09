@@ -7,12 +7,16 @@ LABEL org.opencontainers.image.source="https://github.com/finalpi/bazarr" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.description="Bazarr with subtitle timing validation, contextual translation, and styled ASS output"
 COPY bazarr/app/config.py /app/bazarr/bin/bazarr/app/config.py
+COPY bazarr/api/__init__.py /app/bazarr/bin/bazarr/api/__init__.py
 COPY bazarr/api/subtitles/subtitles.py /app/bazarr/bin/bazarr/api/subtitles/subtitles.py
+COPY bazarr/api/jellyfin/ /app/bazarr/bin/bazarr/api/jellyfin/
+COPY bazarr/jellyfin/ /app/bazarr/bin/bazarr/jellyfin/
 COPY bazarr/subtitles/audio_validation.py bazarr/subtitles/download.py bazarr/subtitles/manual.py bazarr/subtitles/processing.py bazarr/subtitles/embedded_translation.py bazarr/subtitles/translation_priority.py /app/bazarr/bin/bazarr/subtitles/
 COPY bazarr/subtitles/indexer/series.py bazarr/subtitles/indexer/movies.py /app/bazarr/bin/bazarr/subtitles/indexer/
+COPY bazarr/subtitles/tools/delete.py /app/bazarr/bin/bazarr/subtitles/tools/delete.py
 COPY bazarr/subtitles/tools/translate/main.py bazarr/subtitles/tools/translate/traditional.py /app/bazarr/bin/bazarr/subtitles/tools/translate/
 COPY bazarr/subtitles/tools/translate/services/translator_factory.py bazarr/subtitles/tools/translate/services/openai_translator.py /app/bazarr/bin/bazarr/subtitles/tools/translate/services/
 COPY custom_libs/subliminal_patch/core.py custom_libs/subliminal_patch/core_persistent.py /app/bazarr/bin/custom_libs/subliminal_patch/
 COPY frontend/build/ /app/bazarr/bin/frontend/build/
 RUN pip install --no-cache-dir opencc-python-reimplemented==0.1.7 && \
-    python3 -m compileall -q /app/bazarr/bin/bazarr/api/subtitles/subtitles.py /app/bazarr/bin/bazarr/subtitles /app/bazarr/bin/custom_libs/subliminal_patch /app/bazarr/bin/bazarr/app/config.py
+    python3 -m compileall -q /app/bazarr/bin/bazarr/api /app/bazarr/bin/bazarr/jellyfin /app/bazarr/bin/bazarr/subtitles /app/bazarr/bin/custom_libs/subliminal_patch /app/bazarr/bin/bazarr/app/config.py
