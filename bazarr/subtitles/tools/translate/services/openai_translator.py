@@ -194,11 +194,8 @@ class OpenAICompatibleTranslatorService:
         target_ids = [item['index'] for item in targets]
         target_set = set(target_ids)
         surrounding = [item for item in context if item['index'] not in target_set]
-        base_url = str(settings.translator.openai_base_url)
-        is_minimax = 'api.minimax.io' in base_url.lower() or 'api.minimaxi.com' in base_url.lower()
         prompt = (
             'Translate the following English audiovisual subtitles into polished Simplified Chinese.\n\n'
-            'This is direct translation and formatting; no deep analysis is needed.\n\n'
             'Read all cues as one continuous scene and use adjacent cues only to understand pronouns, '
             'fragments, tone, jokes, terminology and implied intent.\n\n'
             'Requirements:\n'
@@ -211,29 +208,25 @@ class OpenAICompatibleTranslatorService:
             '7. Preserve interruptions, hesitation and unfinished sentences with Chinese ellipses.\n'
             '8. Retain separate leading dashes when a cue contains multiple speakers.\n'
             '9. Preserve wordplay, catchphrases, cultural references and invented words with a concise Chinese adaptation; never flatten them into a generic meaning.\n'
-            '10. Translate bracketed sound and delivery descriptions into concise Chinese; do not leave English tags such as [laughs], [screams] or [exhales].\n'
-            '11. Never omit a trailing fragment merely because its sentence continues in the next cue.\n'
-            '12. Keep translations of 28 Chinese full-width characters or fewer on one line. For a longer translation, insert exactly one literal <br> at a natural clause boundary; never split a word, name or fixed phrase.\n'
-            '13. Return every requested [number] exactly once and on one physical line; <br> is the only allowed line-break marker.\n'
-            '14. Output numbered translations only, without Markdown, analysis, explanations, source text or character counts.\n\n'
+            '10. Keep translations of 28 Chinese full-width characters or fewer on one line. For a longer translation, insert exactly one literal <br> at a natural clause boundary; never split a word, name or fixed phrase.\n'
+            '11. Return every requested [number] exactly once and on one physical line; <br> is the only allowed line-break marker.\n'
+            '12. Output numbered translations only, without Markdown, explanations or source text.\n\n'
             'Media context:\n%s\n\n'
             'Surrounding context (understand only; do not output these numbers):\n%s\n\n'
             'Subtitles to translate:\n%s'
         ) % (description or '(none)', _numbered(surrounding, include_translation=True), _numbered(targets))
         payload = {
             'model': settings.translator.openai_model,
-            'temperature': 0.1 if is_minimax else 0,
+            'temperature': 0,
             # Bound verbose/reasoning-capable local models while leaving enough room per cue.
-            'max_tokens': 8192 if is_minimax else max(512, min(8192, len(targets) * 128)),
+            'max_tokens': max(512, min(8192, len(targets) * 128)),
             'messages': [{'role': 'user', 'content': prompt}],
         }
-        if is_minimax:
-            payload['reasoning_split'] = True
         headers = {'Content-Type': 'application/json'}
         api_key = str(settings.translator.openai_api_key).strip()
         if api_key:
             headers['Authorization'] = 'Bearer ' + api_key
-        response = requests.post(self._endpoint(base_url), json=payload,
+        response = requests.post(self._endpoint(settings.translator.openai_base_url), json=payload,
                                  headers=headers, timeout=int(settings.translator.openai_timeout))
         response.raise_for_status()
         body = response.json()

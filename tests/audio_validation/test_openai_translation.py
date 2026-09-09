@@ -208,30 +208,6 @@ def test_request_bounds_model_output_and_validates_indices():
     assert captured['timeout'] == 300
 
 
-def test_request_uses_minimax_compatible_reasoning_parameters():
-    settings = translator_settings(openai_base_url='https://api.minimaxi.com/v1',
-                                   openai_model='MiniMax-M2.7-highspeed')
-    namespace = load_translation_namespace(settings)
-    captured = {}
-    class Response:
-        @staticmethod
-        def raise_for_status():
-            return None
-        @staticmethod
-        def json():
-            return {'choices': [{'message': {'content': '[0] 你好'}}]}
-    namespace['requests'] = SimpleNamespace(
-        post=lambda url, **kwargs: captured.update(url=url, **kwargs) or Response(),
-        RequestException=Exception)
-    service = make_service(namespace, 'source.srt', 'translated.srt')
-    target = [{'index': 0, 'content': 'Hello'}]
-    assert service._request(target, target, '') == {0: '你好'}
-    assert captured['json']['temperature'] == 0.1
-    assert captured['json']['max_tokens'] == 8192
-    assert captured['json']['reasoning_split'] is True
-    assert 'Translate bracketed sound' in captured['json']['messages'][0]['content']
-
-
 def processing_function(name, namespace):
     source = ROOT / 'bazarr/subtitles/processing.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
