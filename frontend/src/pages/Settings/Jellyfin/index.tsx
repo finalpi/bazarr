@@ -141,7 +141,7 @@ const SettingsJellyfinView: FunctionComponent = () => {
             description="Select your movie library from Jellyfin"
           />
           <Check
-            label="Refresh movie metadata after downloading subtitles"
+            label="Refresh movie metadata after subtitle changes"
             settingKey="settings-jellyfin-update_movie_library"
           />
         </Section>
@@ -155,7 +155,7 @@ const SettingsJellyfinView: FunctionComponent = () => {
             description="Select your TV show library from Jellyfin"
           />
           <Check
-            label="Refresh series metadata after downloading subtitles"
+            label="Refresh series metadata after subtitle changes"
             settingKey="settings-jellyfin-update_series_library"
           />
         </Section>
