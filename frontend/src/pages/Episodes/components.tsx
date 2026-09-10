@@ -1,5 +1,5 @@
 import { FunctionComponent, useMemo, useState } from "react";
-import { Badge, MantineColor, Tooltip } from "@mantine/core";
+import { Badge, MantineColor } from "@mantine/core";
 import { useEpisodeSubtitleModification } from "@/apis/hooks";
 import Language from "@/components/bazarr/Language";
 import SubtitleToolsMenu from "@/components/SubtitleToolsMenu";
@@ -23,7 +23,7 @@ export const Subtitle: FunctionComponent<Props> = ({
   const [opened, setOpen] = useState(false);
 
   const embedded = subtitle.path === null && subtitle.embedded_track_id != null;
-  const disabled = subtitle.path === null;
+  const disabled = subtitle.path === null && !embedded;
   const source = missing
     ? "MISSING"
     : embedded
@@ -111,11 +111,7 @@ export const Subtitle: FunctionComponent<Props> = ({
         }
       }}
     >
-      {embedded ? (
-        <Tooltip.Floating label="Embedded Subtitle">{ctx}</Tooltip.Floating>
-      ) : (
-        ctx
-      )}
+      {ctx}
     </SubtitleToolsMenu>
   );
 };
