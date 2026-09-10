@@ -24,6 +24,13 @@ export const Subtitle: FunctionComponent<Props> = ({
 
   const embedded = subtitle.path === null && subtitle.embedded_track_id != null;
   const disabled = subtitle.path === null;
+  const source = missing
+    ? "MISSING"
+    : embedded
+      ? "EMBEDDED"
+      : subtitle.path?.toLowerCase().includes(".llm.")
+        ? "LLM"
+        : undefined;
 
   const variant: MantineColor | undefined = useMemo(() => {
     if (opened && !disabled) {
@@ -63,7 +70,11 @@ export const Subtitle: FunctionComponent<Props> = ({
 
   const ctx = (
     <Badge variant={variant}>
-      <Language.Text value={subtitle} long={false}></Language.Text>
+      <Language.Text
+        value={subtitle}
+        long={false}
+        source={source}
+      ></Language.Text>
     </Badge>
   );
 

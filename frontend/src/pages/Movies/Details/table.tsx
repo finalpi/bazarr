@@ -146,16 +146,32 @@ const Table: FunctionComponent<Props> = ({ movie, profile, disabled }) => {
         header: "Language",
         accessorKey: "name",
         cell: ({ row }) => {
+          const source = isSubtitleMissing(row.original.path)
+            ? "MISSING"
+            : row.original.path == null &&
+                row.original.embedded_track_id != null
+              ? "EMBEDDED"
+              : row.original.path?.toLowerCase().includes(".llm.")
+                ? "LLM"
+                : undefined;
           if (row.original.path === missingText) {
             return (
               <Badge color="primary">
-                <Language.Text value={row.original} long></Language.Text>
+                <Language.Text
+                  value={row.original}
+                  long
+                  source={source}
+                ></Language.Text>
               </Badge>
             );
           } else {
             return (
               <Badge color="secondary">
-                <Language.Text value={row.original} long></Language.Text>
+                <Language.Text
+                  value={row.original}
+                  long
+                  source={source}
+                ></Language.Text>
               </Badge>
             );
           }
