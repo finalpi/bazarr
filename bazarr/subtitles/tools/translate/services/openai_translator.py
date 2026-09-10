@@ -23,6 +23,21 @@ from ..core.translator_utils import add_translator_info, create_process_result, 
 
 logger = logging.getLogger(__name__)
 
+_ENGLISH_NAME_STOPWORDS = {
+    'A', 'All', 'And', 'Are', 'But', 'Can', 'Come', 'Did', 'Do', 'For', 'Good', 'Great',
+    'Have', 'He', 'Hello', 'Hey', 'How', 'I', 'If', 'In', 'Is', 'It', 'Just', 'Let',
+    'Look', 'Maybe', 'My', 'No', 'Now', 'Oh', 'Okay', 'Please', 'Right', 'She', 'So',
+    'Thank', 'That', 'The', 'Then', 'There', 'They', 'This', 'To', 'Wait', 'We', 'Well',
+    'What', 'When', 'Where', 'Who', 'Why', 'Yes', 'You', 'Your',
+}
+
+
+class TranslationConstraintError(ValueError):
+    def __init__(self, message, partial_result, invalid_ids):
+        super().__init__(message)
+        self.partial_result = partial_result
+        self.invalid_ids = set(invalid_ids)
+
 
 def _plain(text):
     return re.sub(r'\s+', ' ', text.replace(r'\N', ' ').replace('\n', ' ')).strip()
@@ -47,6 +62,20 @@ def _speaker_marker_count(text):
 
 def _is_dual_speaker(text):
     return _speaker_marker_count(text) >= 2
+
+
+def _extract_english_name_candidates(lines):
+    counts = {}
+    speaker_names = set()
+    for line in lines:
+        for match in re.finditer(r'\[\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\s*]', line):
+            speaker_names.add(match.group(1))
+        for match in re.finditer(r'\b[A-Z][A-Za-z]{1,}(?:\s+[A-Z][A-Za-z]{1,})*\b', line):
+            name = match.group(0)
+            if name not in _ENGLISH_NAME_STOPWORDS:
+                counts[name] = counts.get(name, 0) + 1
+    recurring = {name for name, count in counts.items() if count >= 2}
+    return sorted(speaker_names | recurring, key=str.casefold)
 
 
 def load_subtitles_with_encoding(path):
@@ -228,6 +257,23 @@ class OpenAICompatibleTranslatorService:
 
     def _request(self, targets, context, description):
         profile = get_active_openai_profile()
+        preserve_english_names = str(self.from_lang).lower() in {'en', 'eng'}
+        batch_text = ' '.join(item['content'] for item in context + targets)
+        english_names = ([name for name in getattr(self, 'english_names', [])
+                          if re.search(r'(?<![A-Za-z])%s(?![A-Za-z])' % re.escape(name), batch_text)]
+                         if preserve_english_names else [])
+        if preserve_english_names:
+            name_instruction = (
+                '3. Keep personal names, character names, nicknames and speaker labels in their original '
+                'Latin spelling. Never translate or transliterate them into Chinese.'
+            )
+            if english_names:
+                name_instruction += ' Names that must remain unchanged: %s.' % ', '.join(english_names)
+        else:
+            name_instruction = (
+                '3. Use established Simplified Chinese translations or transliterations for personal names '
+                'and keep them consistent.'
+            )
         target_ids = [item['index'] for item in targets]
         target_set = set(target_ids)
         surrounding = [item for item in context if item['index'] not in target_set]
@@ -238,7 +284,7 @@ class OpenAICompatibleTranslatorService:
             'Requirements:\n'
             '1. Produce concise, idiomatic spoken Chinese suitable for streaming subtitles.\n'
             '2. Preserve the precise meaning, emotional intensity, speaker changes, names and technical terms.\n'
-            '3. Use established Simplified Chinese transliterations for personal names and keep them consistent.\n'
+            '%s\n'
             '4. Correct malformed source wording only when the intended meaning is strongly supported by adjacent dialogue; otherwise preserve the ambiguity.\n'
             '5. Never add unstated specifications, directions, relationships, actions or plot facts.\n'
             '6. Never move information between cues or complete a sentence early. Each output must contain only information expressed in its matching source cue.\n'
@@ -252,7 +298,8 @@ class OpenAICompatibleTranslatorService:
             'Media context:\n%s\n\n'
             'Surrounding context (understand only; do not output these numbers):\n%s\n\n'
             'Subtitles to translate:\n%s'
-        ) % (description or '(none)', _numbered(surrounding, include_translation=True), _numbered(targets))
+        ) % (name_instruction, description or '(none)',
+             _numbered(surrounding, include_translation=True), _numbered(targets))
         payload = {
             'model': profile['model'],
             'temperature': 0,
@@ -269,23 +316,46 @@ class OpenAICompatibleTranslatorService:
         response.raise_for_status()
         body = response.json()
         result = _extract_numbered(body['choices'][0]['message']['content'], target_ids)
+        invalid_ids = set()
         for target in targets:
             index = target['index']
             result[index] = normalize_chinese_translation(result[index])
             if (_is_dual_speaker(target['content']) and
                     (_speaker_marker_count(result[index]) < 2 or '<br' in result[index].lower())):
-                raise ValueError(f'Model did not preserve both speaker markers for subtitle {index}')
+                invalid_ids.add(index)
+            if preserve_english_names:
+                for name in english_names:
+                    if re.search(r'(?<![A-Za-z])%s(?![A-Za-z])' % re.escape(name), target['content']) and \
+                            not re.search(r'(?<![A-Za-z])%s(?![A-Za-z])' % re.escape(name), result[index]):
+                        invalid_ids.add(index)
+        if invalid_ids:
+            partial_result = {index: text for index, text in result.items() if index not in invalid_ids}
+            raise TranslationConstraintError(
+                'Model output violated name or speaker constraints for subtitles %s' %
+                ', '.join(str(index) for index in sorted(invalid_ids)),
+                partial_result, invalid_ids)
         return result
 
     def _translate_batch(self, targets, context, description):
         error = None
+        translated = {}
+        pending = list(targets)
+        working_context = [dict(item) for item in context]
         for attempt in range(3):
             try:
-                return self._request(targets, context, description)
+                translated.update(self._request(pending, working_context, description))
+                return translated
+            except TranslationConstraintError as exc:
+                error = exc
+                translated.update(exc.partial_result)
+                pending = [item for item in pending if item['index'] in exc.invalid_ids]
+                for item in working_context:
+                    if item['index'] in translated:
+                        item['translation'] = translated[item['index']]
             except (requests.RequestException, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
                 error = exc
-                if attempt < 2:
-                    time.sleep(2 ** attempt)
+            if attempt < 2:
+                time.sleep(2 ** attempt)
         raise RuntimeError('OpenAI-compatible translation failed after 3 attempts') from error
 
     def translate(self, job_id):
@@ -301,6 +371,8 @@ class OpenAICompatibleTranslatorService:
         jobs_queue.update_job_progress(job_id=job_id, progress_max=len(subtitles),
                                        progress_message=self.source_srt_file)
         originals = [_plain(cue.text) for cue in subtitles]
+        self.english_names = (_extract_english_name_candidates(originals)
+                              if str(self.from_lang).lower() in {'en', 'eng'} else [])
         translated = {}
         for start in range(0, len(subtitles), batch_size):
             end = min(start + batch_size, len(subtitles))
