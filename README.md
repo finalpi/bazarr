@@ -38,6 +38,7 @@ The `master` branch and its Docker image extend Bazarr with a subtitle workflow 
 - Extract embedded text subtitle tracks for translation. The work's original-language track is preferred, followed by English.
 - Download the original-language subtitle when no usable embedded or external source exists. Sonarr/Radarr `originalLanguage` metadata is used, so Japanese works request and retain `ja` subtitles.
 - Translate with Ollama or any OpenAI-compatible API using neighboring cues for context, balanced line breaking, bilingual output, and low-priority `.llm.<language>` filenames.
+- Save three additional OpenAI-compatible API profiles and switch the active endpoint, API key, and model together from **Settings > Subtitles > Translating**. The original fields remain available as the Default profile.
 - Translate Simplified Chinese once and create Traditional Chinese locally with OpenCC, avoiding a second LLM request.
 - Save LLM subtitles as styled ASS files with separate `Chinese` and `Original` styles. The fansub-inspired defaults put larger bold yellow Chinese above smaller white original text; both styles and the bottom margin can be adjusted independently with a live preview under **Settings > Subtitles > LLM Subtitle Appearance**.
 - Send configured Apprise notifications, including Telegram, when an LLM translation completes or fails. Success messages include the target language, model, and output filename; failure messages include a short redacted reason.
