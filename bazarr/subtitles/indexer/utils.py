@@ -40,9 +40,20 @@ def get_external_subtitles_path(file, subtitle):
     return path
 
 
-def guess_external_subtitles(dest_folder, subtitles, previously_indexed_subtitles_to_exclude=None):
+def guess_external_subtitles(dest_folder, subtitles, previously_indexed_subtitles_to_exclude=None, media_path=None):
     for subtitle, language in subtitles.items():
         subtitle_path = os.path.join(dest_folder, subtitle)
+        subtitle_stem = os.path.splitext(os.path.basename(subtitle))[0]
+        media_stem = os.path.splitext(os.path.basename(media_path))[0] if media_path else None
+        while subtitle_stem.lower().endswith(('.forced', '.hi', '.sdh', '.cc')):
+            subtitle_stem = os.path.splitext(subtitle_stem)[0]
+        untagged = bool(media_stem and subtitle_stem.casefold() == media_stem.casefold())
+
+        if untagged:
+            logging.debug("BAZARR treating external subtitles without a language suffix as Unknown.")
+            forced = True if os.path.splitext(os.path.splitext(subtitle)[0])[1] == '.forced' else False
+            subtitles[subtitle] = Language.rebuild(Language('und'), forced=forced, hi=False)
+            continue
 
         if not language:
             if os.path.exists(subtitle_path) and os.path.splitext(subtitle_path)[1] in core.SUBTITLE_EXTENSIONS:
