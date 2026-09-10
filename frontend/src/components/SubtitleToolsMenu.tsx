@@ -163,7 +163,11 @@ const SubtitleToolsMenu: FunctionComponent<Props> = ({
         {tools.map((tool) => (
           <Menu.Item
             key={tool.key}
-            disabled={disabledTools}
+            disabled={
+              disabledTools ||
+              (tool.key === "translation" &&
+                selections.some((selection) => selection.language === "und"))
+            }
             leftSection={<FontAwesomeIcon icon={tool.icon}></FontAwesomeIcon>}
             onClick={() => {
               if (tool.modal) {

@@ -701,11 +701,12 @@ def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None) -> List[
         ).all()
 
         for episode_subtitles in episodes_subtitles:
+            unknown = episode_subtitles.language == 'und'
             subtitles.append(
                 {"path": path_mappings.path_replace(episode_subtitles.path),
-                 "name": language_from_alpha2(episode_subtitles.language),
+                 "name": "Unknown" if unknown else language_from_alpha2(episode_subtitles.language),
                  "code2": episode_subtitles.language,
-                 "code3": alpha3_from_alpha2(episode_subtitles.language),
+                 "code3": "und" if unknown else alpha3_from_alpha2(episode_subtitles.language),
                  "forced": episode_subtitles.forced,
                  "hi": episode_subtitles.hi,
                  "file_size": episode_subtitles.size,
@@ -723,11 +724,12 @@ def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None) -> List[
         ).all()
 
         for movie_subtitles in movies_subtitles:
+            unknown = movie_subtitles.language == 'und'
             subtitles.append(
                 {"path": path_mappings.path_replace_movie(movie_subtitles.path),
-                 "name": language_from_alpha2(movie_subtitles.language),
+                 "name": "Unknown" if unknown else language_from_alpha2(movie_subtitles.language),
                  "code2": movie_subtitles.language,
-                 "code3": alpha3_from_alpha2(movie_subtitles.language),
+                 "code3": "und" if unknown else alpha3_from_alpha2(movie_subtitles.language),
                  "forced": movie_subtitles.forced,
                  "hi": movie_subtitles.hi,
                  "file_size": movie_subtitles.size,

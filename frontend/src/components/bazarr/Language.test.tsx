@@ -20,6 +20,14 @@ describe("Language text", () => {
     expect(screen.getByText(testLanguage.name)).toBeDefined();
   });
 
+  it("should label an untagged subtitle as Unknown", () => {
+    customRender(
+      <Language.Text value={{ code2: "und", name: "Unknown" }}></Language.Text>,
+    );
+
+    expect(screen.getByText("Unknown")).toBeDefined();
+  });
+
   const testLanguageWithHi: Language.Info = { ...testLanguage, hi: true };
 
   it("should show short text with HI", () => {

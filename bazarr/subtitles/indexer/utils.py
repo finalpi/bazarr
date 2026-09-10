@@ -3,7 +3,6 @@
 import os
 import logging
 
-from guess_language import guess_language
 from subliminal_patch import core
 from subzero.language import Language
 from charset_normalizer import detect
@@ -45,62 +44,16 @@ def guess_external_subtitles(dest_folder, subtitles, previously_indexed_subtitle
     for subtitle, language in subtitles.items():
         subtitle_path = os.path.join(dest_folder, subtitle)
 
-        if previously_indexed_subtitles_to_exclude and not language:
-            for external_subtitles in previously_indexed_subtitles_to_exclude:
-                if (external_subtitles['path'] == subtitle_path and
-                        external_subtitles['file_size'] == os.stat(subtitle_path).st_size):
-                    subtitles[subtitle] = _get_lang_from_str(external_subtitles['code2'],
-                                                             external_subtitles['forced'],
-                                                             external_subtitles['hi'])
-                    break
-
         if not language:
             if os.path.exists(subtitle_path) and os.path.splitext(subtitle_path)[1] in core.SUBTITLE_EXTENSIONS:
-                logging.debug("BAZARR falling back to file content analysis to detect language.")
-                detected_language = None
-
-                # detect forced subtitles
+                logging.debug("BAZARR treating external subtitles without a language suffix as Unknown.")
                 forced = True if os.path.splitext(os.path.splitext(subtitle)[0])[1] == '.forced' else False
-
-                # to improve performance, skip detection of files larger that 1M
-                if os.path.getsize(subtitle_path) > MAXIMUM_SUBTITLE_SIZE:
-                    logging.debug(f"BAZARR subtitles file is too large to be text based. Skipping this file: "
-                                  f"{subtitle_path}")
-                    continue
-
-                with open(subtitle_path, 'rb') as f:
-                    text = f.read()
-
-                encoding = detect(text)
-                if encoding and 'encoding' in encoding and encoding['encoding']:
-                    encoding = detect(text)['encoding']
-                else:
-                    logging.debug(f"BAZARR skipping this subtitles because we can't guess the encoding. "
-                                  f"It's probably a binary file: {subtitle_path}")
-                    continue
-                text = text.decode(encoding)
-
-                detected_language = guess_language(text)
-
-                # add simplified and traditional chinese detection
-                if detected_language == 'zh':
-                    traditional_chinese_fuzzy = [u"繁", u"雙語"]
-                    traditional_chinese = [".cht", ".tc", ".zh-tw", ".zht", ".zh-hant", ".zhhant", ".zh_hant",
-                                           ".hant", ".big5", ".traditional"]
-                    if str(os.path.splitext(subtitle)[0]).lower().endswith(tuple(traditional_chinese)) or \
-                            (str(subtitle_path).lower())[:-5] in traditional_chinese_fuzzy:
-                        detected_language = 'zt'
-
-                if detected_language:
-                    logging.debug(f"BAZARR external subtitles detected and guessed this language: {detected_language}")
-                    try:
-                        subtitles[subtitle] = Language.rebuild(Language.fromietf(detected_language), forced=forced,
-                                                               hi=False)
-                    except Exception:
-                        pass
+                subtitles[subtitle] = Language.rebuild(Language('und'), forced=forced, hi=False)
 
         # If language is still None (undetected), skip it
         if hasattr(subtitles[subtitle], 'basename') and not subtitles[subtitle].basename:
+            continue
+        if hasattr(subtitles[subtitle], 'basename') and subtitles[subtitle].basename == 'und':
             continue
 
         # Skip HI detection if forced

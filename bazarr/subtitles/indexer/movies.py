@@ -165,7 +165,9 @@ def store_subtitles_movie(radarr_id, use_cache=True):
             for subtitle, language in subtitles.items():
                 valid_language = False
                 if language:
-                    if hasattr(language, 'alpha3'):
+                    if getattr(language, 'basename', None) == 'und':
+                        valid_language = 'und'
+                    elif hasattr(language, 'alpha3'):
                         valid_language = alpha2_from_alpha3(language.alpha3)
                 else:
                     logging.debug(f"Skipping subtitles because we are unable to define language: {subtitle}")
@@ -195,7 +197,7 @@ def store_subtitles_movie(radarr_id, use_cache=True):
                                                'size': subtitle_size})
 
                 # We get defined and supported language external subtitles
-                elif str(language.basename) != 'und':
+                else:
                     logging.debug(f"BAZARR external subtitles detected: {language}"
                                   f"{':forced' if language.forced else ''}"
                                   f"{':hi' if language.hi else ''}")
@@ -208,6 +210,10 @@ def store_subtitles_movie(radarr_id, use_cache=True):
 
             # We store external subtitles in the database or update existing ones
             if len(external_subtitles):
+                database.execute(
+                    delete(TableMoviesSubtitles)
+                    .where(TableMoviesSubtitles.radarrId == radarr_id)
+                    .where(TableMoviesSubtitles.path.in_([item['path'] for item in external_subtitles])))
                 stmt = insert(TableMoviesSubtitles).values(external_subtitles)
                 stmt = stmt.on_conflict_do_update(
                     index_elements=['path', 'radarrId', 'language', 'forced', 'hi'],

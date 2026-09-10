@@ -10,6 +10,7 @@ import time
 
 import pysubs2
 import requests
+from charset_normalizer import detect
 
 from app.config import settings
 from app.jobs_queue import jobs_queue
@@ -25,6 +26,19 @@ logger = logging.getLogger(__name__)
 
 def _plain(text):
     return re.sub(r'\s+', ' ', text.replace(r'\N', ' ').replace('\n', ' ')).strip()
+
+
+def load_subtitles_with_encoding(path):
+    try:
+        return pysubs2.load(path, encoding='utf-8')
+    except UnicodeDecodeError:
+        with open(path, 'rb') as source:
+            raw = source.read()
+        encoding = (detect(raw) or {}).get('encoding')
+        if not encoding:
+            raise
+        logger.info('BAZARR detected %s encoding for translation source %s', encoding, path)
+        return pysubs2.load(path, encoding=encoding)
 
 
 def wrap_translation(text, width=28):
@@ -247,7 +261,7 @@ class OpenAICompatibleTranslatorService:
 
     def translate(self, job_id):
         profile = get_active_openai_profile()
-        subtitles = pysubs2.load(self.source_srt_file, encoding='utf-8')
+        subtitles = load_subtitles_with_encoding(self.source_srt_file)
         subtitles.remove_miscellaneous_events()
         if not subtitles:
             raise ValueError('Subtitle file has no dialogue cues')

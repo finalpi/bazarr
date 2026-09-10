@@ -12,16 +12,19 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'libs'))
 
 import pysubs2
+from charset_normalizer import detect
 
 
 def load_translation_namespace(settings):
     source = ROOT / 'bazarr/subtitles/tools/translate/services/openai_translator.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
-    wanted = {'_plain', 'wrap_translation', '_ass_color', '_ass_style', 'apply_ass_style', '_extract_numbered', '_numbered',
+    wanted = {'_plain', 'load_subtitles_with_encoding', 'wrap_translation', '_ass_color', '_ass_style',
+              'apply_ass_style', '_extract_numbered', '_numbered',
               'OpenAICompatibleTranslatorService'}
     nodes = [node for node in tree.body if getattr(node, 'name', None) in wanted]
     namespace = {
-        'json': json, 'logging': logging, 'os': os, 're': re, 'time': __import__('time'),
+        'json': json, 'logging': logging, 'logger': logging.getLogger(__name__), 'os': os, 're': re,
+        'time': __import__('time'), 'detect': detect,
         'pysubs2': pysubs2, 'requests': SimpleNamespace(RequestException=Exception),
         'settings': settings, 'jobs_queue': SimpleNamespace(update_job_progress=lambda **kwargs: None),
         'get_description': lambda *args: 'Criminal Minds season 1',
@@ -97,6 +100,19 @@ def test_wraps_chinese_at_punctuation_and_parses_numbered_output():
         2: '你好', 3: '再见'}
     assert namespace['_extract_numbered']('1. 二十\n2. 二十一', [20, 21]) == {
         20: '二十', 21: '二十一'}
+
+
+def test_loads_legacy_encoded_translation_source(tmp_path):
+    namespace = load_translation_namespace(translator_settings())
+    source = tmp_path / 'legacy.srt'
+    chinese = '不，伙计。这是一段用于检测中文字幕编码的测试内容。'
+    source.write_bytes(
+        f'1\n00:00:01,000 --> 00:00:02,000\n{chinese}\nNo, dude.\n'.encode('gb18030'))
+
+    subtitles = namespace['load_subtitles_with_encoding'](str(source))
+
+    assert len(subtitles) == 1
+    assert subtitles[0].text == chinese + r'\N' + 'No, dude.'
 
 
 def test_context_batches_and_bilingual_output_preserve_cue_timing(tmp_path):
