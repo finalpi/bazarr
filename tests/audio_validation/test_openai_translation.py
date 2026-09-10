@@ -412,9 +412,10 @@ def test_embedded_subtitle_extraction_uses_selected_track_and_cache(tmp_path, mo
             '1\n00:00:01,000 --> 00:00:02,000\nEmbedded English subtitle\n', encoding='utf-8')
 
     monkeypatch.setattr(module.subprocess, 'run', run)
-    first = module.extract_embedded_subtitle(video, 4, tmp_path / 'cache', lambda name: name)
-    second = module.extract_embedded_subtitle(video, 4, tmp_path / 'cache', lambda name: name)
+    first = module.extract_embedded_subtitle(video, 4, tmp_path / 'cache', lambda name: name, language='ja')
+    second = module.extract_embedded_subtitle(video, 4, tmp_path / 'cache', lambda name: name, language='ja')
     assert first == second
+    assert first.endswith('.ja.srt')
     assert len(commands) == 1
     assert commands[0][commands[0].index('-map') + 1] == '0:4'
 

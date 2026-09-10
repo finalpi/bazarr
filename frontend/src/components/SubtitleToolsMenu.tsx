@@ -154,6 +154,9 @@ const SubtitleToolsMenu: FunctionComponent<Props> = ({
   const modals = useModals();
 
   const disabledTools = selections.length === 0;
+  const hasEmbeddedTrack = selections.some(
+    (selection) => selection.embeddedTrackId !== undefined,
+  );
 
   return (
     <Menu withArrow withinPortal position="left-end" {...menu}>
@@ -165,6 +168,7 @@ const SubtitleToolsMenu: FunctionComponent<Props> = ({
             key={tool.key}
             disabled={
               disabledTools ||
+              (hasEmbeddedTrack && tool.key !== "translation") ||
               (tool.key === "translation" &&
                 selections.some((selection) => selection.language === "und"))
             }
@@ -192,7 +196,11 @@ const SubtitleToolsMenu: FunctionComponent<Props> = ({
           Search
         </Menu.Item>
         <Menu.Item
-          disabled={selections.length === 0 || onAction === undefined}
+          disabled={
+            selections.length === 0 ||
+            hasEmbeddedTrack ||
+            onAction === undefined
+          }
           color="red"
           leftSection={<FontAwesomeIcon icon={faTrash}></FontAwesomeIcon>}
           onClick={() => {

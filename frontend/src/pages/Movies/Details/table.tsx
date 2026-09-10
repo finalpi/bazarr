@@ -37,14 +37,17 @@ const Table: FunctionComponent<Props> = ({ movie, profile, disabled }) => {
 
   const CodeCell = React.memo(({ item }: { item: Subtitle }) => {
     const { code2, path, hi, forced } = item;
+    const embeddedTrackId = item.embedded_track_id;
+    const embedded = !path && embeddedTrackId != null;
 
     const selections = useMemo(() => {
       const list: FormType.ModifySubtitle[] = [];
 
-      if (path && !isSubtitleMissing(path) && movie !== null) {
+      if ((embedded || (path && !isSubtitleMissing(path))) && movie !== null) {
         list.push({
           type: "movie",
-          path,
+          path: path ?? "",
+          embeddedTrackId: embeddedTrackId ?? undefined,
           id: movie.radarrId,
           language: code2,
           forced: toPython(forced),
@@ -53,7 +56,7 @@ const Table: FunctionComponent<Props> = ({ movie, profile, disabled }) => {
       }
 
       return list;
-    }, [code2, path, forced, hi]);
+    }, [code2, embedded, embeddedTrackId, path, forced, hi]);
 
     if (movie === null) {
       return null;
@@ -103,7 +106,7 @@ const Table: FunctionComponent<Props> = ({ movie, profile, disabled }) => {
       >
         <Action
           label="Subtitle Actions"
-          disabled={isSubtitleTrack(path)}
+          disabled={isSubtitleTrack(path) && !embedded}
           icon={faEllipsis}
         ></Action>
       </SubtitleToolsMenu>
