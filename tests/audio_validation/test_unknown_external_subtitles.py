@@ -30,7 +30,8 @@ def load_guess_external_subtitles():
 def test_untagged_external_subtitle_is_unknown_even_if_previously_guessed(tmp_path):
     path = tmp_path / 'episode.srt'
     path.write_text('1\n00:00:01,000 --> 00:00:02,000\nHello\n', encoding='utf-8')
-    subtitles = {'episode.srt': None}
+    # Single-language mode may pre-label an untagged file as English before indexing.
+    subtitles = {'episode.srt': Language('eng')}
     previous = [{
         'path': str(path),
         'file_size': path.stat().st_size,
@@ -39,6 +40,7 @@ def test_untagged_external_subtitle_is_unknown_even_if_previously_guessed(tmp_pa
         'hi': False,
     }]
 
-    result = load_guess_external_subtitles()(str(tmp_path), subtitles, previous)
+    result = load_guess_external_subtitles()(
+        str(tmp_path), subtitles, previous, media_path=str(tmp_path / 'episode.mkv'))
 
     assert result['episode.srt'].basename == 'und'
