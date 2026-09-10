@@ -10,6 +10,7 @@ from subzero.language import Language
 from .core.translator_utils import validate_translation_params, convert_language_codes
 from .services.translator_factory import TranslatorFactory
 from .traditional import convert_simplified_file
+from .openai_profiles import get_active_openai_profile
 from subtitles.translation_priority import mark_as_llm_subtitle
 from languages.get_languages import alpha3_from_alpha2
 from app.config import settings
@@ -25,7 +26,8 @@ def _send_llm_translation_notification(success, translator_type, to_lang, media_
         return
 
     if translator_type == 'openai_compatible':
-        model = settings.translator.openai_model
+        profile = get_active_openai_profile()
+        model = profile['model']
     elif translator_type == 'gemini':
         model = settings.translator.gemini_model
     else:
@@ -37,8 +39,10 @@ def _send_llm_translation_notification(success, translator_type, to_lang, media_
             message += f': {os.path.basename(output_path)}'
     else:
         reason = str(error)[:500] if error else 'Unknown error'
-        for secret_name in ('openai_api_key', 'gemini_key', 'lingarr_token'):
-            secret = str(getattr(settings.translator, secret_name, '') or '')
+        secrets = [get_active_openai_profile()['api_key']]
+        secrets.extend(str(getattr(settings.translator, name, '') or '')
+                       for name in ('gemini_key', 'lingarr_token'))
+        for secret in secrets:
             if secret:
                 reason = reason.replace(secret, '[redacted]')
         message = f'LLM translation failed to {to_lang.upper()} using {model}: {reason}'

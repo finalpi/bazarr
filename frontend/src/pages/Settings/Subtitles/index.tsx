@@ -8,7 +8,6 @@ import {
   Message,
   MultiSelector,
   Number,
-  Password,
   Section,
   Selector,
   Slider,
@@ -19,6 +18,7 @@ import {
   SubzeroModification,
 } from "@/pages/Settings/utilities/modifications";
 import LLMSubtitleAppearance from "./LLMSubtitleAppearance";
+import OpenAIProfiles from "./OpenAIProfiles";
 import {
   adaptiveSearchingDelayOption,
   adaptiveSearchingDeltaOption,
@@ -710,19 +710,7 @@ const SettingsSubtitlesView: FunctionComponent = () => {
           settingKey="settings-translator-translator_type"
           on={(val) => val === "openai_compatible"}
         >
-          <Text
-            label="OpenAI-compatible base URL"
-            settingKey="settings-translator-openai_base_url"
-          />
-          <Message>
-            Ollama on this Mac: http://host.docker.internal:11434/v1. OpenAI:
-            https://api.openai.com/v1.
-          </Message>
-          <Text label="Model" settingKey="settings-translator-openai_model" />
-          <Password
-            label="API key (optional for Ollama)"
-            settingKey="settings-translator-openai_api_key"
-          />
+          <OpenAIProfiles />
           <Number
             label="Lines per translation batch"
             settingKey="settings-translator-openai_batch_size"

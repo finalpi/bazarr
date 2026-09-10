@@ -28,6 +28,8 @@ def test_llm_translation_notifications_route_and_redact_details():
         'settings': settings,
         'send_notifications': lambda *args: episode_notifications.append(args),
         'send_notifications_movie': lambda *args: movie_notifications.append(args),
+        'get_active_openai_profile': lambda: {
+            'model': 'gpt-test', 'api_key': 'secret-key'},
     })
 
     notify(True, 'openai_compatible', 'zh', 'episode', 12, 2389, None,

@@ -29,6 +29,12 @@ def load_translation_namespace(settings):
         'create_process_result': lambda *args: object(),
         'language_from_alpha2': str, 'language_from_alpha3': str,
         'history_log': lambda **kwargs: None, 'history_log_movie': lambda **kwargs: None,
+        'get_active_openai_profile': lambda: {
+            'id': 'default', 'name': 'Default',
+            'base_url': settings.translator.openai_base_url,
+            'api_key': settings.translator.openai_api_key,
+            'model': settings.translator.openai_model,
+        },
     }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec'), namespace)
     return namespace

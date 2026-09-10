@@ -16,6 +16,7 @@ from app.jobs_queue import jobs_queue
 from languages.get_languages import language_from_alpha2, language_from_alpha3
 from sonarr.history import history_log
 from radarr.history import history_log_movie
+from ..openai_profiles import get_active_openai_profile
 from ..core.translator_utils import add_translator_info, create_process_result, get_description
 
 
@@ -191,6 +192,7 @@ class OpenAICompatibleTranslatorService:
         return base_url if base_url.endswith('/chat/completions') else base_url + '/chat/completions'
 
     def _request(self, targets, context, description):
+        profile = get_active_openai_profile()
         target_ids = [item['index'] for item in targets]
         target_set = set(target_ids)
         surrounding = [item for item in context if item['index'] not in target_set]
@@ -216,17 +218,17 @@ class OpenAICompatibleTranslatorService:
             'Subtitles to translate:\n%s'
         ) % (description or '(none)', _numbered(surrounding, include_translation=True), _numbered(targets))
         payload = {
-            'model': settings.translator.openai_model,
+            'model': profile['model'],
             'temperature': 0,
             # Bound verbose/reasoning-capable local models while leaving enough room per cue.
             'max_tokens': max(512, min(8192, len(targets) * 128)),
             'messages': [{'role': 'user', 'content': prompt}],
         }
         headers = {'Content-Type': 'application/json'}
-        api_key = str(settings.translator.openai_api_key).strip()
+        api_key = profile['api_key']
         if api_key:
             headers['Authorization'] = 'Bearer ' + api_key
-        response = requests.post(self._endpoint(settings.translator.openai_base_url), json=payload,
+        response = requests.post(self._endpoint(profile['base_url']), json=payload,
                                  headers=headers, timeout=int(settings.translator.openai_timeout))
         response.raise_for_status()
         body = response.json()
@@ -244,6 +246,7 @@ class OpenAICompatibleTranslatorService:
         raise RuntimeError('OpenAI-compatible translation failed after 3 attempts') from error
 
     def translate(self, job_id):
+        profile = get_active_openai_profile()
         subtitles = pysubs2.load(self.source_srt_file, encoding='utf-8')
         subtitles.remove_miscellaneous_events()
         if not subtitles:
@@ -280,7 +283,7 @@ class OpenAICompatibleTranslatorService:
                 subtitles.insert(0, pysubs2.SSAEvent(
                     start=info_start,
                     end=info_end,
-                    text='# Subtitles translated with %s # ' % settings.translator.openai_model,
+                    text='# Subtitles translated with %s # ' % profile['model'],
                     style='Original',
                 ))
         temporary = self.dest_srt_file + '.tmp'
@@ -292,7 +295,7 @@ class OpenAICompatibleTranslatorService:
                 os.remove(temporary)
         if settings.translator.translator_info and not styled_ass:
             add_translator_info(self.dest_srt_file,
-                                '# Subtitles translated with %s # ' % settings.translator.openai_model)
+                                '# Subtitles translated with %s # ' % profile['model'])
         message = '%s subtitles translated to %s.' % (
             language_from_alpha2(self.from_lang), language_from_alpha3(self.to_lang))
         result = create_process_result(message, self.video_path, self.orig_to_lang, self.forced, self.hi,

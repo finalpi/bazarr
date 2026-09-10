@@ -204,12 +204,21 @@ const TranslationForm: FunctionComponent<Props> = ({
           ...defaultConfig,
           service: "Lingarr",
         };
-      case "openai_compatible":
+      case "openai_compatible": {
+        const activeProfile =
+          settings?.data?.translator?.openai_active_profile ?? "default";
+        const profileModel =
+          activeProfile === "default"
+            ? settings?.data?.translator?.openai_model
+            : settings?.data?.translator?.[
+                `openai_${activeProfile}_model` as keyof Settings.Translator
+              ];
         return {
           ...defaultConfig,
           service: "OpenAI Compatible",
-          model: ` (${settings?.data?.translator?.openai_model || ""})`,
+          model: ` (${profileModel || ""})`,
         };
+      }
       default:
         return defaultConfig;
     }
