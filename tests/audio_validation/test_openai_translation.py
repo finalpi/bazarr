@@ -19,7 +19,9 @@ from charset_normalizer import detect
 def load_translation_namespace(settings):
     source = ROOT / 'bazarr/subtitles/tools/translate/services/openai_translator.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
-    wanted = {'_plain', 'normalize_chinese_translation', '_speaker_marker_count', '_is_dual_speaker',
+    wanted = {'TranslationConstraintError', '_plain', 'normalize_chinese_translation',
+              '_speaker_marker_count', '_is_dual_speaker',
+              '_extract_english_name_candidates',
               'load_subtitles_with_encoding', 'wrap_translation', '_ass_color', '_ass_style',
               'apply_ass_style', '_extract_numbered', '_numbered',
               'OpenAICompatibleTranslatorService'}
@@ -27,6 +29,12 @@ def load_translation_namespace(settings):
     namespace = {
         'json': json, 'logging': logging, 'logger': logging.getLogger(__name__), 'os': os, 're': re,
         'time': __import__('time'), 'detect': detect,
+        '_ENGLISH_NAME_STOPWORDS': {
+            'A', 'All', 'And', 'Are', 'But', 'Can', 'Come', 'Did', 'Do', 'For', 'Good', 'Great',
+            'Have', 'He', 'Hello', 'Hey', 'How', 'I', 'If', 'In', 'Is', 'It', 'Just', 'Let',
+            'Look', 'Maybe', 'My', 'No', 'Now', 'Oh', 'Okay', 'Please', 'Right', 'She', 'So',
+            'Thank', 'That', 'The', 'Then', 'There', 'They', 'This', 'To', 'Wait', 'We', 'Well',
+            'What', 'When', 'Where', 'Who', 'Why', 'Yes', 'You', 'Your'},
         'pysubs2': pysubs2, 'requests': SimpleNamespace(RequestException=Exception),
         'settings': settings, 'jobs_queue': SimpleNamespace(update_job_progress=lambda **kwargs: None),
         'get_description': lambda *args: 'Criminal Minds season 1',
@@ -113,6 +121,17 @@ def test_normalizes_chinese_punctuation_and_dual_speakers():
     assert normalize('我…我的意思是...') == '我…我的意思是…'
     assert namespace['_is_dual_speaker']('-How are you? -I am fine.')
     assert namespace['_speaker_marker_count']('-你好吗？ -我很好') == 2
+
+
+def test_extracts_recurring_english_names_and_speaker_labels():
+    namespace = load_translation_namespace(translator_settings())
+    names = namespace['_extract_english_name_candidates']([
+        '[Dennis] No, dude.',
+        'Marge, come here.',
+        'What did Marge say?',
+        'Okay, this is fine.',
+    ])
+    assert names == ['Dennis', 'Marge']
 
 
 def test_loads_legacy_encoded_translation_source(tmp_path):
@@ -265,8 +284,65 @@ def test_request_normalizes_and_requires_dual_speaker_markers():
     assert service._request(target, target, '') == {0: '-你好吗 -我很好'}
 
     content['value'] = '[0] 你好吗 我很好'
-    with pytest.raises(ValueError, match='speaker markers'):
+    with pytest.raises(ValueError, match='violated name or speaker constraints'):
         service._request(target, target, '')
+
+
+def test_request_preserves_detected_names_only_for_english_sources():
+    settings = translator_settings()
+    namespace = load_translation_namespace(settings)
+    content = {'value': '[0] Marge 过来一下'}
+    captured = {}
+
+    class Response:
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {'choices': [{'message': {'content': content['value']}}]}
+
+    def post(*args, **kwargs):
+        captured.update(kwargs)
+        return Response()
+
+    namespace['requests'] = SimpleNamespace(post=post, RequestException=Exception)
+    service = make_service(namespace, 'source.srt', 'translated.srt')
+    service.english_names = ['Marge']
+    target = [{'index': 0, 'content': 'Marge, come here.'}]
+
+    assert service._request(target, target, '') == {0: 'Marge 过来一下'}
+    assert 'Never translate or transliterate them' in captured['json']['messages'][0]['content']
+
+    content['value'] = '[0] 玛姬 过来一下'
+    with pytest.raises(ValueError, match='violated name or speaker constraints'):
+        service._request(target, target, '')
+
+    service.from_lang = 'ja'
+    service.english_names = []
+    assert service._request(target, target, '') == {0: '玛姬 过来一下'}
+    assert 'established Simplified Chinese translations' in captured['json']['messages'][0]['content']
+
+
+def test_constraint_retry_only_resubmits_invalid_lines():
+    namespace = load_translation_namespace(translator_settings())
+    service = make_service(namespace, 'source.srt', 'translated.srt')
+    calls = []
+
+    def request(targets, context, description):
+        calls.append([item['index'] for item in targets])
+        if len(calls) == 1:
+            raise namespace['TranslationConstraintError'](
+                'one invalid line', {0: '合格'}, {1})
+        return {1: '修复'}
+
+    service._request = request
+    targets = [{'index': 0, 'content': 'Good'}, {'index': 1, 'content': 'Bad'}]
+    context = [dict(item, translation=None) for item in targets]
+
+    assert service._translate_batch(targets, context, '') == {0: '合格', 1: '修复'}
+    assert calls == [[0, 1], [1]]
 
 
 def processing_function(name, namespace):
