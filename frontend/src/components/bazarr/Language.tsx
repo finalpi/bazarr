@@ -18,7 +18,7 @@ const LanguageText: FunctionComponent<LanguageTextProps> = ({
   ...props
 }) => {
   const result = useMemo(() => {
-    let lang = value.code2;
+    let lang = value.code2 === "und" ? "Unknown" : value.code2;
     let hi = ":HI";
     let forced = ":Forced";
     if (long) {
