@@ -12,13 +12,15 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'libs'))
 
 import pysubs2
+import pytest
 from charset_normalizer import detect
 
 
 def load_translation_namespace(settings):
     source = ROOT / 'bazarr/subtitles/tools/translate/services/openai_translator.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
-    wanted = {'_plain', 'load_subtitles_with_encoding', 'wrap_translation', '_ass_color', '_ass_style',
+    wanted = {'_plain', 'normalize_chinese_translation', '_speaker_marker_count', '_is_dual_speaker',
+              'load_subtitles_with_encoding', 'wrap_translation', '_ass_color', '_ass_style',
               'apply_ass_style', '_extract_numbered', '_numbered',
               'OpenAICompatibleTranslatorService'}
     nodes = [node for node in tree.body if getattr(node, 'name', None) in wanted]
@@ -100,6 +102,17 @@ def test_wraps_chinese_at_punctuation_and_parses_numbered_output():
         2: '你好', 3: '再见'}
     assert namespace['_extract_numbered']('1. 二十\n2. 二十一', [20, 21]) == {
         20: '二十', 21: '二十一'}
+
+
+def test_normalizes_chinese_punctuation_and_dual_speakers():
+    namespace = load_translation_namespace(translator_settings())
+    normalize = namespace['normalize_chinese_translation']
+    assert normalize('你好，朋友。你还好吗？') == '你好 朋友 你还好吗？'
+    assert normalize('价格是3.5元，编号F.B.I.。') == '价格是3.5元 编号F.B.I.'
+    assert normalize('— 你好吗？ — 我很好。') == '-你好吗？ -我很好'
+    assert normalize('我…我的意思是...') == '我…我的意思是…'
+    assert namespace['_is_dual_speaker']('-How are you? -I am fine.')
+    assert namespace['_speaker_marker_count']('-你好吗？ -我很好') == 2
 
 
 def test_loads_legacy_encoded_translation_source(tmp_path):
@@ -228,6 +241,32 @@ def test_request_bounds_model_output_and_validates_indices():
     assert captured['json']['messages'][0]['role'] == 'user'
     assert 'Never add unstated specifications' in captured['json']['messages'][0]['content']
     assert captured['timeout'] == 300
+
+
+def test_request_normalizes_and_requires_dual_speaker_markers():
+    settings = translator_settings()
+    namespace = load_translation_namespace(settings)
+    content = {'value': '[0] —你好吗， —我很好。'}
+
+    class Response:
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {'choices': [{'message': {'content': content['value']}}]}
+
+    namespace['requests'] = SimpleNamespace(
+        post=lambda *args, **kwargs: Response(), RequestException=Exception)
+    service = make_service(namespace, 'source.srt', 'translated.srt')
+    target = [{'index': 0, 'content': '-How are you? -I am fine.'}]
+
+    assert service._request(target, target, '') == {0: '-你好吗 -我很好'}
+
+    content['value'] = '[0] 你好吗 我很好'
+    with pytest.raises(ValueError, match='speaker markers'):
+        service._request(target, target, '')
 
 
 def processing_function(name, namespace):
