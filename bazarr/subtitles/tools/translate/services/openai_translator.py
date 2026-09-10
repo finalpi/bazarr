@@ -28,6 +28,27 @@ def _plain(text):
     return re.sub(r'\s+', ' ', text.replace(r'\N', ' ').replace('\n', ' ')).strip()
 
 
+def normalize_chinese_translation(text):
+    """Apply the punctuation and speaker-marker rules used by Simplified Chinese subtitles."""
+    text = re.sub(r'(^|\s)[—–-]\s*(?=\S)', r'\1-', text)
+    text = re.sub(r'\.{3,}', '…', text)
+    text = re.sub(r'[，。]', ' ', text)
+    text = re.sub(r'(?<!\d),(?!\d)', ' ', text)
+    text = re.sub(r'(?<![A-Za-z0-9])\.(?![A-Za-z0-9])', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r'\s+([？！!?：:；;、”’》）】])', r'\1', text)
+    text = re.sub(r'([“‘《（【])\s+', r'\1', text)
+    return text
+
+
+def _speaker_marker_count(text):
+    return len(re.findall(r'(^|\s)-(?=\S)', _plain(text)))
+
+
+def _is_dual_speaker(text):
+    return _speaker_marker_count(text) >= 2
+
+
 def load_subtitles_with_encoding(path):
     try:
         return pysubs2.load(path, encoding='utf-8')
@@ -41,7 +62,7 @@ def load_subtitles_with_encoding(path):
         return pysubs2.load(path, encoding=encoding)
 
 
-def wrap_translation(text, width=28):
+def wrap_translation(text, width=24):
     """Use a valid model-supplied break, or find a local clause boundary as fallback."""
     marked_parts = re.split(r'\s*<br\s*/?>\s*', text, flags=re.I)
     text = _plain(''.join(marked_parts))
@@ -222,11 +243,12 @@ class OpenAICompatibleTranslatorService:
             '5. Never add unstated specifications, directions, relationships, actions or plot facts.\n'
             '6. Never move information between cues or complete a sentence early. Each output must contain only information expressed in its matching source cue.\n'
             '7. Preserve interruptions, hesitation and unfinished sentences with Chinese ellipses.\n'
-            '8. Retain separate leading dashes when a cue contains multiple speakers.\n'
+            '8. When two speakers share one cue, prefix both utterances with an ASCII hyphen and keep them on one physical line, exactly like: -你好吗？ -我很好\n'
             '9. Preserve wordplay, catchphrases, cultural references and invented words with a concise Chinese adaptation; never flatten them into a generic meaning.\n'
-            '10. Keep translations of 28 Chinese full-width characters or fewer on one line. For a longer translation, insert exactly one literal <br> at a natural clause boundary; never split a word, name or fixed phrase.\n'
-            '11. Return every requested [number] exactly once and on one physical line; <br> is the only allowed line-break marker.\n'
-            '12. Output numbered translations only, without Markdown, explanations or source text.\n\n'
+            '10. Do not use commas or periods in Chinese; replace each with one space. Keep question marks and necessary exclamation marks, colons, quotation marks and ellipses.\n'
+            '11. Prefer concise Chinese lines of 18 full-width characters or fewer. Never exceed 24 characters per display line; for a longer single-speaker translation, insert exactly one literal <br> at a natural clause boundary. Never split a word, name or fixed phrase.\n'
+            '12. Return every requested [number] exactly once and on one physical line; <br> is the only allowed line-break marker.\n'
+            '13. Output numbered translations only, without Markdown, explanations or source text.\n\n'
             'Media context:\n%s\n\n'
             'Surrounding context (understand only; do not output these numbers):\n%s\n\n'
             'Subtitles to translate:\n%s'
@@ -246,7 +268,14 @@ class OpenAICompatibleTranslatorService:
                                  headers=headers, timeout=int(settings.translator.openai_timeout))
         response.raise_for_status()
         body = response.json()
-        return _extract_numbered(body['choices'][0]['message']['content'], target_ids)
+        result = _extract_numbered(body['choices'][0]['message']['content'], target_ids)
+        for target in targets:
+            index = target['index']
+            result[index] = normalize_chinese_translation(result[index])
+            if (_is_dual_speaker(target['content']) and
+                    (_speaker_marker_count(result[index]) < 2 or '<br' in result[index].lower())):
+                raise ValueError(f'Model did not preserve both speaker markers for subtitle {index}')
+        return result
 
     def _translate_batch(self, targets, context, description):
         error = None
@@ -285,7 +314,12 @@ class OpenAICompatibleTranslatorService:
                                            progress_message=self.source_srt_file)
         bilingual = bool(settings.translator.openai_bilingual)
         for index, cue in enumerate(subtitles):
-            chinese = wrap_translation(translated[index]) if self.to_lang == 'zho' else translated[index]
+            if self.to_lang == 'zho':
+                chinese = normalize_chinese_translation(translated[index])
+                if not _is_dual_speaker(originals[index]):
+                    chinese = wrap_translation(chinese)
+            else:
+                chinese = translated[index]
             cue.text = originals[index] + r'\N' + chinese if bilingual else chinese
         styled_ass = bool(settings.translator.openai_styled_ass)
         if styled_ass:
