@@ -281,7 +281,8 @@ def _queue_missing_chinese_translation(video_path, source_path=None, source_lang
                     from subtitles.embedded_translation import extract_embedded_subtitle
                     source_path = extract_embedded_subtitle(
                         video_path, embedded[0]['embedded_track_id'],
-                        os.path.join(args.config_dir, 'cache', 'embedded-translation'), get_binary)
+                        os.path.join(args.config_dir, 'cache', 'embedded-translation'), get_binary,
+                        language=language)
                     source_language = language
                 except Exception:
                     logging.exception('BAZARR unable to extract preferred embedded %s subtitles', language)

@@ -41,6 +41,7 @@ declare namespace FormType {
     type: "episode" | "movie";
     language: string;
     path: string;
+    embeddedTrackId?: number;
     forced?: PythonBoolean;
     hi?: PythonBoolean;
     original_format?: PythonBoolean;

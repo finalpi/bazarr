@@ -22,6 +22,7 @@ export const Subtitle: FunctionComponent<Props> = ({
 
   const [opened, setOpen] = useState(false);
 
+  const embedded = subtitle.path === null && subtitle.embedded_track_id != null;
   const disabled = subtitle.path === null;
 
   const variant: MantineColor | undefined = useMemo(() => {
@@ -37,29 +38,34 @@ export const Subtitle: FunctionComponent<Props> = ({
   const selections = useMemo<FormType.ModifySubtitle[]>(() => {
     const list: FormType.ModifySubtitle[] = [];
 
-    if (subtitle.path) {
+    if (subtitle.path || embedded) {
       list.push({
         id: episodeId,
         type: "episode",
         language: subtitle.code2,
-        path: subtitle.path,
+        path: subtitle.path ?? "",
+        embeddedTrackId: subtitle.embedded_track_id ?? undefined,
         forced: toPython(subtitle.forced),
         hi: toPython(subtitle.hi),
       });
     }
 
     return list;
-  }, [episodeId, subtitle.code2, subtitle.path, subtitle.forced, subtitle.hi]);
+  }, [
+    embedded,
+    episodeId,
+    subtitle.code2,
+    subtitle.embedded_track_id,
+    subtitle.forced,
+    subtitle.hi,
+    subtitle.path,
+  ]);
 
   const ctx = (
     <Badge variant={variant}>
       <Language.Text value={subtitle} long={false}></Language.Text>
     </Badge>
   );
-
-  if (disabled) {
-    return <Tooltip.Floating label="Embedded Subtitle">{ctx}</Tooltip.Floating>;
-  }
 
   return (
     <SubtitleToolsMenu
@@ -94,7 +100,11 @@ export const Subtitle: FunctionComponent<Props> = ({
         }
       }}
     >
-      {ctx}
+      {embedded ? (
+        <Tooltip.Floating label="Embedded Subtitle">{ctx}</Tooltip.Floating>
+      ) : (
+        ctx
+      )}
     </SubtitleToolsMenu>
   );
 };

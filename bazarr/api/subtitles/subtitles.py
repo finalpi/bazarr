@@ -2,6 +2,7 @@
 
 import os
 import sys
+import logging
 
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
 
@@ -82,7 +83,9 @@ class Subtitles(Resource):
     patch_request_parser.add_argument('action', type=str, required=True,
                                       help='Action from ["sync", "translate" or mods name]')
     patch_request_parser.add_argument('language', type=str, required=True, help='Language code2')
-    patch_request_parser.add_argument('path', type=str, required=True, help='Subtitles file path')
+    patch_request_parser.add_argument('path', type=str, required=False, help='External subtitles file path')
+    patch_request_parser.add_argument('embeddedTrackId', type=int, required=False,
+                                      help='Embedded subtitle stream index used for translation')
     patch_request_parser.add_argument('type', type=str, required=True, help='Media type from ["episode", "movie"]')
     patch_request_parser.add_argument('id', type=int, required=True, help='Media ID (episodeId, radarrId)')
     patch_request_parser.add_argument('forced', type=str, required=False,
@@ -115,13 +118,11 @@ class Subtitles(Resource):
 
         language = args.get('language')
         subtitles_path = args.get('path')
+        embedded_track_id = args.get('embeddedTrackId')
         media_type = args.get('type')
         id = args.get('id')
         forced = True if args.get('forced') == 'True' else False
         hi = True if args.get('hi') == 'True' else False
-
-        if not os.path.exists(subtitles_path):
-            return 'Subtitles file not found. Path mapping issue?', 500
 
         if media_type == 'episode':
             metadata = database.execute(
@@ -145,6 +146,12 @@ class Subtitles(Resource):
                 return 'Movie not found', 404
 
             video_path = path_mappings.path_replace_movie(metadata.path)
+
+        if embedded_track_id is None:
+            if not subtitles_path or not os.path.exists(subtitles_path):
+                return 'Subtitles file not found. Path mapping issue?', 500
+        elif action != 'translate':
+            return 'Embedded subtitle tracks only support translation', 400
 
         if action == 'sync':
             try:
@@ -174,15 +181,31 @@ class Subtitles(Resource):
                                       radarr_id=id if media_type == "movie" else None)
 
             if subtitles:
-                for external_subtitles in subtitles:
-                    if external_subtitles['path'] == subtitles_path:
-                        from_language = external_subtitles['code2']
+                for subtitle in subtitles:
+                    if embedded_track_id is not None and subtitle['embedded_track_id'] == embedded_track_id:
+                        from_language = subtitle['code2']
+                        break
+                    if embedded_track_id is None and subtitle['path'] == subtitles_path:
+                        from_language = subtitle['code2']
                         break
 
                 if not from_language or not alpha3_from_alpha2(from_language):
                     return 'Invalid source language code', 400
                 if from_language == dest_language:
                     return 'Source and target languages must be different', 400
+
+                if embedded_track_id is not None:
+                    try:
+                        from app.get_args import args as app_args
+                        from subtitles.embedded_translation import extract_embedded_subtitle
+                        from utilities.binaries import get_binary
+                        subtitles_path = extract_embedded_subtitle(
+                            video_path, embedded_track_id,
+                            os.path.join(app_args.config_dir, 'cache', 'embedded-translation'),
+                            get_binary, language=from_language)
+                    except Exception:
+                        logging.exception('Unable to extract embedded subtitle track %s', embedded_track_id)
+                        return 'Unable to extract embedded subtitle track', 409
 
                 try:
                     translate_subtitles_file(video_path=video_path, source_srt_file=subtitles_path,
