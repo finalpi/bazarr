@@ -28,6 +28,14 @@ describe("Language text", () => {
     expect(screen.getByText("Unknown")).toBeDefined();
   });
 
+  it("should append the subtitle source", () => {
+    customRender(
+      <Language.Text value={testLanguage} source="EMBEDDED"></Language.Text>,
+    );
+
+    expect(screen.getByText("en · EMBEDDED")).toBeDefined();
+  });
+
   const testLanguageWithHi: Language.Info = { ...testLanguage, hi: true };
 
   it("should show short text with HI", () => {

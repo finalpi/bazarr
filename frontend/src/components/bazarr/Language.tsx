@@ -5,6 +5,7 @@ import { BuildKey } from "@/utilities";
 type LanguageTextProps = TextProps & {
   value: Language.Info;
   long?: boolean;
+  source?: string;
 };
 
 declare type LanguageComponent = {
@@ -15,6 +16,7 @@ declare type LanguageComponent = {
 const LanguageText: FunctionComponent<LanguageTextProps> = ({
   value,
   long,
+  source,
   ...props
 }) => {
   const result = useMemo(() => {
@@ -33,8 +35,11 @@ const LanguageText: FunctionComponent<LanguageTextProps> = ({
     } else if (value.forced) {
       res += forced;
     }
+    if (source) {
+      res += ` · ${source}`;
+    }
     return res;
-  }, [value, long]);
+  }, [value, long, source]);
 
   return (
     <Text inherit {...props}>
