@@ -21,7 +21,8 @@ def load_translation_namespace(settings):
     tree = ast.parse(source.read_text(encoding='utf-8'))
     wanted = {'TranslationConstraintError', '_plain', 'normalize_chinese_translation',
               '_speaker_marker_count', '_is_dual_speaker',
-              '_looks_like_sound_description', '_extract_english_name_candidates',
+              '_looks_like_sound_description', '_contains_english_name',
+              '_extract_english_name_candidates',
               'load_subtitles_with_encoding', 'wrap_translation', '_ass_color', '_ass_style',
               'apply_ass_style', '_extract_numbered', '_numbered',
               'OpenAICompatibleTranslatorService'}
@@ -129,6 +130,8 @@ def test_extracts_recurring_english_names_and_speaker_labels():
         '[Dennis] No, dude.',
         '[Sighs] Do not do that.',
         '[Door Closes]',
+        "Don't do that.",
+        "Don't leave yet.",
         'Marge, come here.',
         'What did Marge say?',
         'Okay, this is fine.',
@@ -136,6 +139,8 @@ def test_extracts_recurring_english_names_and_speaker_labels():
     assert names == ['Dennis', 'Marge']
     assert namespace['_looks_like_sound_description']('Sighs')
     assert not namespace['_looks_like_sound_description']('Dennis')
+    assert not namespace['_contains_english_name']("Don't do that", 'Don')
+    assert namespace['_contains_english_name']('Ask Don about it', 'Don')
 
 
 def test_loads_legacy_encoded_translation_source(tmp_path):
