@@ -31,6 +31,13 @@ _ENGLISH_NAME_STOPWORDS = {
     'What', 'When', 'Where', 'Who', 'Why', 'Yes', 'You', 'Your',
 }
 
+_ENGLISH_SOUND_WORDS = {
+    'applause', 'breathes', 'breathing', 'cheering', 'chuckles', 'closes', 'coughs',
+    'cries', 'crying', 'door', 'exhales', 'gasps', 'groans', 'grunts', 'inhales',
+    'laughing', 'laughs', 'music', 'mumbles', 'mumbling', 'phone', 'rings', 'screams',
+    'shouts', 'sighs', 'singing', 'sniffs', 'sobbing', 'speaks', 'whispers', 'yells',
+}
+
 
 class TranslationConstraintError(ValueError):
     def __init__(self, message, partial_result, invalid_ids):
@@ -64,15 +71,22 @@ def _is_dual_speaker(text):
     return _speaker_marker_count(text) >= 2
 
 
+def _looks_like_sound_description(value):
+    words = {word.lower() for word in re.findall(r"[A-Za-z]+", value)}
+    return bool(words & _ENGLISH_SOUND_WORDS)
+
+
 def _extract_english_name_candidates(lines):
     counts = {}
     speaker_names = set()
     for line in lines:
         for match in re.finditer(r'\[\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\s*]', line):
-            speaker_names.add(match.group(1))
+            name = match.group(1)
+            if not _looks_like_sound_description(name):
+                speaker_names.add(name)
         for match in re.finditer(r'\b[A-Z][A-Za-z]{1,}(?:\s+[A-Z][A-Za-z]{1,})*\b', line):
             name = match.group(0)
-            if name not in _ENGLISH_NAME_STOPWORDS:
+            if name not in _ENGLISH_NAME_STOPWORDS and not _looks_like_sound_description(name):
                 counts[name] = counts.get(name, 0) + 1
     recurring = {name for name, count in counts.items() if count >= 2}
     return sorted(speaker_names | recurring, key=str.casefold)
@@ -352,11 +366,13 @@ class OpenAICompatibleTranslatorService:
                 for item in working_context:
                     if item['index'] in translated:
                         item['translation'] = translated[item['index']]
+                logger.warning('Retrying only constrained subtitle cues %s (attempt %d/3)',
+                               sorted(exc.invalid_ids), attempt + 1)
             except (requests.RequestException, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
                 error = exc
             if attempt < 2:
                 time.sleep(2 ** attempt)
-        raise RuntimeError('OpenAI-compatible translation failed after 3 attempts') from error
+        raise RuntimeError(f'OpenAI-compatible translation failed after 3 attempts: {error}') from error
 
     def translate(self, job_id):
         profile = get_active_openai_profile()

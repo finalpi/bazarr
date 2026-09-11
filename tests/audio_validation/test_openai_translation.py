@@ -21,20 +21,20 @@ def load_translation_namespace(settings):
     tree = ast.parse(source.read_text(encoding='utf-8'))
     wanted = {'TranslationConstraintError', '_plain', 'normalize_chinese_translation',
               '_speaker_marker_count', '_is_dual_speaker',
-              '_extract_english_name_candidates',
+              '_looks_like_sound_description', '_extract_english_name_candidates',
               'load_subtitles_with_encoding', 'wrap_translation', '_ass_color', '_ass_style',
               'apply_ass_style', '_extract_numbered', '_numbered',
               'OpenAICompatibleTranslatorService'}
-    nodes = [node for node in tree.body if getattr(node, 'name', None) in wanted]
+    wanted_constants = {'_ENGLISH_NAME_STOPWORDS', '_ENGLISH_SOUND_WORDS'}
+    nodes = [
+        node for node in tree.body
+        if getattr(node, 'name', None) in wanted or
+        (isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id in wanted_constants for target in node.targets))
+    ]
     namespace = {
         'json': json, 'logging': logging, 'logger': logging.getLogger(__name__), 'os': os, 're': re,
         'time': __import__('time'), 'detect': detect,
-        '_ENGLISH_NAME_STOPWORDS': {
-            'A', 'All', 'And', 'Are', 'But', 'Can', 'Come', 'Did', 'Do', 'For', 'Good', 'Great',
-            'Have', 'He', 'Hello', 'Hey', 'How', 'I', 'If', 'In', 'Is', 'It', 'Just', 'Let',
-            'Look', 'Maybe', 'My', 'No', 'Now', 'Oh', 'Okay', 'Please', 'Right', 'She', 'So',
-            'Thank', 'That', 'The', 'Then', 'There', 'They', 'This', 'To', 'Wait', 'We', 'Well',
-            'What', 'When', 'Where', 'Who', 'Why', 'Yes', 'You', 'Your'},
         'pysubs2': pysubs2, 'requests': SimpleNamespace(RequestException=Exception),
         'settings': settings, 'jobs_queue': SimpleNamespace(update_job_progress=lambda **kwargs: None),
         'get_description': lambda *args: 'Criminal Minds season 1',
@@ -127,11 +127,15 @@ def test_extracts_recurring_english_names_and_speaker_labels():
     namespace = load_translation_namespace(translator_settings())
     names = namespace['_extract_english_name_candidates']([
         '[Dennis] No, dude.',
+        '[Sighs] Do not do that.',
+        '[Door Closes]',
         'Marge, come here.',
         'What did Marge say?',
         'Okay, this is fine.',
     ])
     assert names == ['Dennis', 'Marge']
+    assert namespace['_looks_like_sound_description']('Sighs')
+    assert not namespace['_looks_like_sound_description']('Dennis')
 
 
 def test_loads_legacy_encoded_translation_source(tmp_path):
