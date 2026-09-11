@@ -76,6 +76,10 @@ def _looks_like_sound_description(value):
     return bool(words & _ENGLISH_SOUND_WORDS)
 
 
+def _contains_english_name(text, name):
+    return bool(re.search(r"(?<![A-Za-z'’])%s(?![A-Za-z'’])" % re.escape(name), text))
+
+
 def _extract_english_name_candidates(lines):
     counts = {}
     speaker_names = set()
@@ -84,7 +88,7 @@ def _extract_english_name_candidates(lines):
             name = match.group(1)
             if not _looks_like_sound_description(name):
                 speaker_names.add(name)
-        for match in re.finditer(r'\b[A-Z][A-Za-z]{1,}(?:\s+[A-Z][A-Za-z]{1,})*\b', line):
+        for match in re.finditer(r"(?<![A-Za-z'’])\b[A-Z][A-Za-z]{1,}(?:\s+[A-Z][A-Za-z]{1,})*\b(?!['’])", line):
             name = match.group(0)
             if name not in _ENGLISH_NAME_STOPWORDS and not _looks_like_sound_description(name):
                 counts[name] = counts.get(name, 0) + 1
@@ -274,7 +278,7 @@ class OpenAICompatibleTranslatorService:
         preserve_english_names = str(self.from_lang).lower() in {'en', 'eng'}
         batch_text = ' '.join(item['content'] for item in context + targets)
         english_names = ([name for name in getattr(self, 'english_names', [])
-                          if re.search(r'(?<![A-Za-z])%s(?![A-Za-z])' % re.escape(name), batch_text)]
+                          if _contains_english_name(batch_text, name)]
                          if preserve_english_names else [])
         if preserve_english_names:
             name_instruction = (
@@ -339,8 +343,8 @@ class OpenAICompatibleTranslatorService:
                 invalid_ids.add(index)
             if preserve_english_names:
                 for name in english_names:
-                    if re.search(r'(?<![A-Za-z])%s(?![A-Za-z])' % re.escape(name), target['content']) and \
-                            not re.search(r'(?<![A-Za-z])%s(?![A-Za-z])' % re.escape(name), result[index]):
+                    if _contains_english_name(target['content'], name) and \
+                            not _contains_english_name(result[index], name):
                         invalid_ids.add(index)
         if invalid_ids:
             partial_result = {index: text for index, text in result.items() if index not in invalid_ids}
