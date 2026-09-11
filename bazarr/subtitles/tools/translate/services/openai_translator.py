@@ -23,22 +23,6 @@ from ..core.translator_utils import add_translator_info, create_process_result, 
 
 logger = logging.getLogger(__name__)
 
-_ENGLISH_NAME_STOPWORDS = {
-    'A', 'All', 'And', 'Are', 'But', 'Can', 'Come', 'Did', 'Do', 'For', 'Good', 'Great',
-    'Have', 'He', 'Hello', 'Hey', 'How', 'I', 'If', 'In', 'Is', 'It', 'Just', 'Let',
-    'Look', 'Maybe', 'My', 'No', 'Now', 'Oh', 'Okay', 'Please', 'Right', 'She', 'So',
-    'Thank', 'That', 'The', 'Then', 'There', 'They', 'This', 'To', 'Wait', 'We', 'Well',
-    'What', 'When', 'Where', 'Who', 'Why', 'Yes', 'You', 'Your',
-}
-
-_ENGLISH_SOUND_WORDS = {
-    'applause', 'breathes', 'breathing', 'cheering', 'chuckles', 'closes', 'coughs',
-    'cries', 'crying', 'door', 'exhales', 'gasps', 'groans', 'grunts', 'inhales',
-    'laughing', 'laughs', 'music', 'mumbles', 'mumbling', 'phone', 'rings', 'screams',
-    'shouts', 'sighs', 'singing', 'sniffs', 'sobbing', 'speaks', 'whispers', 'yells',
-}
-
-
 class TranslationConstraintError(ValueError):
     def __init__(self, message, partial_result, invalid_ids):
         super().__init__(message)
@@ -69,31 +53,6 @@ def _speaker_marker_count(text):
 
 def _is_dual_speaker(text):
     return _speaker_marker_count(text) >= 2
-
-
-def _looks_like_sound_description(value):
-    words = {word.lower() for word in re.findall(r"[A-Za-z]+", value)}
-    return bool(words & _ENGLISH_SOUND_WORDS)
-
-
-def _contains_english_name(text, name):
-    return bool(re.search(r"(?<![A-Za-z'’])%s(?![A-Za-z'’])" % re.escape(name), text))
-
-
-def _extract_english_name_candidates(lines):
-    counts = {}
-    speaker_names = set()
-    for line in lines:
-        for match in re.finditer(r'\[\s*([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*)\s*]', line):
-            name = match.group(1)
-            if not _looks_like_sound_description(name):
-                speaker_names.add(name)
-        for match in re.finditer(r"(?<![A-Za-z'’])\b[A-Z][A-Za-z]{1,}(?:\s+[A-Z][A-Za-z]{1,})*\b(?!['’])", line):
-            name = match.group(0)
-            if name not in _ENGLISH_NAME_STOPWORDS and not _looks_like_sound_description(name):
-                counts[name] = counts.get(name, 0) + 1
-    recurring = {name for name, count in counts.items() if count >= 2}
-    return sorted(speaker_names | recurring, key=str.casefold)
 
 
 def load_subtitles_with_encoding(path):
@@ -276,17 +235,11 @@ class OpenAICompatibleTranslatorService:
     def _request(self, targets, context, description):
         profile = get_active_openai_profile()
         preserve_english_names = str(self.from_lang).lower() in {'en', 'eng'}
-        batch_text = ' '.join(item['content'] for item in context + targets)
-        english_names = ([name for name in getattr(self, 'english_names', [])
-                          if _contains_english_name(batch_text, name)]
-                         if preserve_english_names else [])
         if preserve_english_names:
             name_instruction = (
                 '3. Keep personal names, character names, nicknames and speaker labels in their original '
                 'Latin spelling. Never translate or transliterate them into Chinese.'
             )
-            if english_names:
-                name_instruction += ' Names that must remain unchanged: %s.' % ', '.join(english_names)
         else:
             name_instruction = (
                 '3. Use established Simplified Chinese translations or transliterations for personal names '
@@ -341,15 +294,10 @@ class OpenAICompatibleTranslatorService:
             if (_is_dual_speaker(target['content']) and
                     (_speaker_marker_count(result[index]) < 2 or '<br' in result[index].lower())):
                 invalid_ids.add(index)
-            if preserve_english_names:
-                for name in english_names:
-                    if _contains_english_name(target['content'], name) and \
-                            not _contains_english_name(result[index], name):
-                        invalid_ids.add(index)
         if invalid_ids:
             partial_result = {index: text for index, text in result.items() if index not in invalid_ids}
             raise TranslationConstraintError(
-                'Model output violated name or speaker constraints for subtitles %s' %
+                'Model output violated dual-speaker constraints for subtitles %s' %
                 ', '.join(str(index) for index in sorted(invalid_ids)),
                 partial_result, invalid_ids)
         return result
@@ -391,8 +339,6 @@ class OpenAICompatibleTranslatorService:
         jobs_queue.update_job_progress(job_id=job_id, progress_max=len(subtitles),
                                        progress_message=self.source_srt_file)
         originals = [_plain(cue.text) for cue in subtitles]
-        self.english_names = (_extract_english_name_candidates(originals)
-                              if str(self.from_lang).lower() in {'en', 'eng'} else [])
         translated = {}
         for start in range(0, len(subtitles), batch_size):
             end = min(start + batch_size, len(subtitles))

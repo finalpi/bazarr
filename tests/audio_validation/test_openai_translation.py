@@ -21,18 +21,10 @@ def load_translation_namespace(settings):
     tree = ast.parse(source.read_text(encoding='utf-8'))
     wanted = {'TranslationConstraintError', '_plain', 'normalize_chinese_translation',
               '_speaker_marker_count', '_is_dual_speaker',
-              '_looks_like_sound_description', '_contains_english_name',
-              '_extract_english_name_candidates',
               'load_subtitles_with_encoding', 'wrap_translation', '_ass_color', '_ass_style',
               'apply_ass_style', '_extract_numbered', '_numbered',
               'OpenAICompatibleTranslatorService'}
-    wanted_constants = {'_ENGLISH_NAME_STOPWORDS', '_ENGLISH_SOUND_WORDS'}
-    nodes = [
-        node for node in tree.body
-        if getattr(node, 'name', None) in wanted or
-        (isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id in wanted_constants for target in node.targets))
-    ]
+    nodes = [node for node in tree.body if getattr(node, 'name', None) in wanted]
     namespace = {
         'json': json, 'logging': logging, 'logger': logging.getLogger(__name__), 'os': os, 're': re,
         'time': __import__('time'), 'detect': detect,
@@ -122,25 +114,6 @@ def test_normalizes_chinese_punctuation_and_dual_speakers():
     assert normalize('我…我的意思是...') == '我…我的意思是…'
     assert namespace['_is_dual_speaker']('-How are you? -I am fine.')
     assert namespace['_speaker_marker_count']('-你好吗？ -我很好') == 2
-
-
-def test_extracts_recurring_english_names_and_speaker_labels():
-    namespace = load_translation_namespace(translator_settings())
-    names = namespace['_extract_english_name_candidates']([
-        '[Dennis] No, dude.',
-        '[Sighs] Do not do that.',
-        '[Door Closes]',
-        "Don't do that.",
-        "Don't leave yet.",
-        'Marge, come here.',
-        'What did Marge say?',
-        'Okay, this is fine.',
-    ])
-    assert names == ['Dennis', 'Marge']
-    assert namespace['_looks_like_sound_description']('Sighs')
-    assert not namespace['_looks_like_sound_description']('Dennis')
-    assert not namespace['_contains_english_name']("Don't do that", 'Don')
-    assert namespace['_contains_english_name']('Ask Don about it', 'Don')
 
 
 def test_loads_legacy_encoded_translation_source(tmp_path):
@@ -293,11 +266,11 @@ def test_request_normalizes_and_requires_dual_speaker_markers():
     assert service._request(target, target, '') == {0: '-你好吗 -我很好'}
 
     content['value'] = '[0] 你好吗 我很好'
-    with pytest.raises(ValueError, match='violated name or speaker constraints'):
+    with pytest.raises(ValueError, match='violated dual-speaker constraints'):
         service._request(target, target, '')
 
 
-def test_request_preserves_detected_names_only_for_english_sources():
+def test_request_prompts_name_policy_by_source_language_without_enforcement():
     settings = translator_settings()
     namespace = load_translation_namespace(settings)
     content = {'value': '[0] Marge 过来一下'}
@@ -318,18 +291,15 @@ def test_request_preserves_detected_names_only_for_english_sources():
 
     namespace['requests'] = SimpleNamespace(post=post, RequestException=Exception)
     service = make_service(namespace, 'source.srt', 'translated.srt')
-    service.english_names = ['Marge']
     target = [{'index': 0, 'content': 'Marge, come here.'}]
 
     assert service._request(target, target, '') == {0: 'Marge 过来一下'}
     assert 'Never translate or transliterate them' in captured['json']['messages'][0]['content']
 
     content['value'] = '[0] 玛姬 过来一下'
-    with pytest.raises(ValueError, match='violated name or speaker constraints'):
-        service._request(target, target, '')
+    assert service._request(target, target, '') == {0: '玛姬 过来一下'}
 
     service.from_lang = 'ja'
-    service.english_names = []
     assert service._request(target, target, '') == {0: '玛姬 过来一下'}
     assert 'established Simplified Chinese translations' in captured['json']['messages'][0]['content']
 
