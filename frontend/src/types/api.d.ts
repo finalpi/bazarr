@@ -395,6 +395,7 @@ interface SubtitleInfo {
   filename: string;
   episode: number;
   season: number;
+  subtitle_language?: string;
 }
 
 declare namespace SubtitleContents {

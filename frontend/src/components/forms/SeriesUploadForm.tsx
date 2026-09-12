@@ -21,6 +21,7 @@ import { isString, uniqBy } from "lodash";
 import {
   useEpisodesBySeriesId,
   useEpisodeSubtitleModification,
+  useLanguages,
   useSubtitleInfos,
 } from "@/apis/hooks";
 import { subtitlesTypeOptions } from "@/components/forms/uploadFormSelectorTypes";
@@ -34,6 +35,7 @@ import {
   useLanguageProfileBy,
   useProfileItemsToLanguages,
 } from "@/utilities/languages";
+import { detectSubtitleLanguage } from "@/utilities/subtitleLanguage";
 
 type SubtitleFile = {
   file: File;
@@ -98,7 +100,22 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
   );
 
   const profile = useLanguageProfileBy(series.profileId);
-  const languages = useProfileItemsToLanguages(profile);
+  const profileLanguages = useProfileItemsToLanguages(profile);
+  const allLanguages = useLanguages();
+  const languages = useMemo(
+    () =>
+      uniqBy(
+        [
+          ...profileLanguages,
+          ...(allLanguages.data?.map<Language.Info>((language) => ({
+            code2: language.code2,
+            name: language.name,
+          })) ?? []),
+        ],
+        "code2",
+      ),
+    [allLanguages.data, profileLanguages],
+  );
   const languageOptions = useSelectorOptions(
     uniqBy(languages, "code2"),
     (v) => v.name,
@@ -106,8 +123,8 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
   );
 
   const defaultLanguage = useMemo(
-    () => (languages.length > 0 ? languages[0] : null),
-    [languages],
+    () => (profileLanguages.length > 0 ? profileLanguages[0] : null),
+    [profileLanguages],
   );
 
   const form = useForm({
@@ -152,22 +169,40 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
 
   const names = useMemo(() => files.map((v) => v.name), [files]);
   const infos = useSubtitleInfos(names);
+  const detectedLanguages = useMemo(
+    () => Promise.all(files.map((file) => detectSubtitleLanguage(file))),
+    [files],
+  );
 
-  // Auto assign episode if available
+  // Auto assign episode and language when the filename or content is clear.
   useEffect(() => {
     if (infos.data !== undefined) {
-      action.update((item) => {
-        const info = infos.data.find((v) => v.filename === item.file.name);
-        if (info) {
-          item.episode =
-            episodes.data?.find(
-              (v) => v.season === info.season && v.episode === info.episode,
-            ) ?? item.episode;
-        }
-        return item;
+      void detectedLanguages.then((languageCodes) => {
+        action.update((item) => {
+          const info = infos.data.find((v) => v.filename === item.file.name);
+          const fileIndex = files.findIndex((file) => file === item.file);
+          const detectedCode =
+            languageCodes[fileIndex] ?? info?.subtitle_language;
+          const language =
+            languages.find((value) => value.code2 === detectedCode) ??
+            item.language;
+
+          if (!info) return { ...item, language };
+
+          const episodeCandidates =
+            episodes.data?.filter((value) => value.episode === info.episode) ??
+            [];
+          const episode =
+            episodeCandidates.find((value) => value.season === info.season) ??
+            (info.season === 0 && episodeCandidates.length === 1
+              ? episodeCandidates[0]
+              : item.episode);
+
+          return { ...item, episode, language };
+        });
       });
     }
-  }, [action, episodes.data, infos.data]);
+  }, [action, detectedLanguages, episodes.data, files, infos.data, languages]);
 
   const ValidateResultCell = ({
     validateResult,
@@ -390,6 +425,11 @@ const SeriesUploadForm: FunctionComponent<Props> = ({
       })}
     >
       <Stack className="table-long-break">
+        <Text size="sm" c="dimmed">
+          Language and episode are detected from each filename and subtitle
+          content. Use the selectors to correct a result, or the column header
+          to apply one language or type to every file.
+        </Text>
         <SimpleTable columns={columns} data={form.values.files}></SimpleTable>
         <Divider></Divider>
         <Button type="submit">Upload</Button>
