@@ -9,9 +9,10 @@ LABEL org.opencontainers.image.source="https://github.com/finalpi/bazarr" \
 COPY bazarr/app/config.py bazarr/app/database.py /app/bazarr/bin/bazarr/app/
 COPY bazarr/api/__init__.py /app/bazarr/bin/bazarr/api/__init__.py
 COPY bazarr/api/subtitles/subtitles.py /app/bazarr/bin/bazarr/api/subtitles/subtitles.py
+COPY bazarr/api/subtitles/subtitles_info.py /app/bazarr/bin/bazarr/api/subtitles/subtitles_info.py
 COPY bazarr/api/jellyfin/ /app/bazarr/bin/bazarr/api/jellyfin/
 COPY bazarr/jellyfin/ /app/bazarr/bin/bazarr/jellyfin/
-COPY bazarr/subtitles/audio_validation.py bazarr/subtitles/download.py bazarr/subtitles/manual.py bazarr/subtitles/processing.py bazarr/subtitles/embedded_translation.py bazarr/subtitles/translation_priority.py /app/bazarr/bin/bazarr/subtitles/
+COPY bazarr/subtitles/audio_validation.py bazarr/subtitles/download.py bazarr/subtitles/manual.py bazarr/subtitles/processing.py bazarr/subtitles/embedded_translation.py bazarr/subtitles/translation_priority.py bazarr/subtitles/upload.py /app/bazarr/bin/bazarr/subtitles/
 COPY bazarr/subtitles/indexer/series.py bazarr/subtitles/indexer/movies.py bazarr/subtitles/indexer/utils.py /app/bazarr/bin/bazarr/subtitles/indexer/
 COPY bazarr/subtitles/tools/delete.py /app/bazarr/bin/bazarr/subtitles/tools/delete.py
 COPY bazarr/subtitles/tools/translate/main.py bazarr/subtitles/tools/translate/traditional.py bazarr/subtitles/tools/translate/openai_profiles.py /app/bazarr/bin/bazarr/subtitles/tools/translate/
