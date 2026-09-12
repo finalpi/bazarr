@@ -1,6 +1,8 @@
 from subliminal_patch.chinese import select_archive_entry, subtitle_language_hint, title_variants
 import io
+import subprocess
 from zipfile import ZipFile
+from unittest.mock import patch
 
 from subliminal_patch.providers.localsibling import _language_matches, _same_work
 from subliminal_patch.providers.r3sub import R3subProvider
@@ -105,3 +107,16 @@ def test_local_sibling_requires_the_same_title():
 def test_r3sub_interstitial_parser_reads_actual_second_hop_values():
     body = '<form action="/jpdown1.php"><input name="id" value="abc"><input name="lang" value="tw"></form>'
     assert R3subProvider._form_values(body) == {'id': 'abc', 'lang': 'tw'}
+
+
+def test_r3sub_uses_dedicated_proxy_only_after_direct_cloudflare_403():
+    provider = R3subProvider(email='configured', password='configured')
+    provider._cookie_jar = '/tmp/cookies'
+    provider._proxy_url = 'http://host.docker.internal:7890'
+    forbidden = subprocess.CalledProcessError(22, ['curl'], stderr=b'HTTP 403')
+    success = subprocess.CompletedProcess(['curl'], 0, stdout=b'ok', stderr=b'')
+    with patch('subliminal_patch.providers.r3sub.subprocess.run', side_effect=[forbidden, success]) as run:
+        assert provider._curl('https://forum.r3sub.com/entry/signin') == b'ok'
+    assert provider._use_proxy is True
+    assert '-x' not in run.call_args_list[0].args[0]
+    assert run.call_args_list[1].args[0][1:3] == ['-x', provider._proxy_url]
