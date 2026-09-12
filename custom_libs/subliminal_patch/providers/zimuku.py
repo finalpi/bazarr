@@ -7,6 +7,7 @@ import os
 import zipfile
 import re
 import copy
+import time
 from PIL import Image
 
 try:
@@ -20,7 +21,7 @@ from subzero.language import Language
 from guessit import guessit
 from requests import Session
 from six import text_type
-from random import randint, randrange
+from random import randint, randrange, uniform
 
 from subliminal.providers import ParserBeautifulSoup
 from subliminal_patch.pitcher import pitchers
@@ -35,6 +36,8 @@ from subliminal_patch.subtitle import (
 )
 from .utils import FIRST_THOUSAND_OR_SO_USER_AGENTS as AGENT_LIST
 from subliminal.video import Episode, Movie
+from subliminal.exceptions import ProviderError
+from subliminal_patch.chinese import select_archive_entry
 
 logger = logging.getLogger(__name__)
 
@@ -97,15 +100,23 @@ class ZimukuProvider(Provider):
     video_types = (Episode, Movie)
     logger.info(str(supported_languages))
 
-    server_url = "https://srtku.com"
+    server_url = "https://zimuku.org"
     search_url = "/search?q={}"
 
     subtitle_class = ZimukuSubtitle
 
     def __init__(self):
         self.session = None
+        self._last_request = 0.0
 
     verify_token = ""
+
+    def _wait(self):
+        """Keep requests to the community site slow and non-bursty."""
+        delay = uniform(1.5, 3.0) - (time.monotonic() - self._last_request)
+        if delay > 0:
+            time.sleep(delay)
+        self._last_request = time.monotonic()
     code = ""
     location_re = re.compile(
         r'self\.location = "(.*)" \+ stringToHex\(')
@@ -134,9 +145,8 @@ class ZimukuProvider(Provider):
             pitcher = pitchers.get_pitcher(image_pitcher)("Zimuku", fp)
             return pitcher.throw()
 
-        i = -1
-        while True:
-            i += 1
+        for attempt in range(6):
+            self._wait()
             r = self.session.get(url, *args, **kwargs)
             if r.status_code == 404:
                 # mock js script logic
@@ -148,15 +158,18 @@ class ZimukuProvider(Provider):
                     self.code = f"{randrange(800, 1920)},{randrange(600, 1080)}"
                 self.session.cookies.set("srcurl", string_to_hex(r.url))
                 if tr:
+                    self._wait()
                     verify_resp = self.session.get(
                         urljoin(self.server_url, tr[0] + string_to_hex(self.code)), allow_redirects=False)
                     if verify_resp.status_code == 302 \
                             and self.session.cookies.get("security_session_verify") is not None:
                         pass
+                    time.sleep(min(1 + attempt, 5))
                     continue
             if len(self.location_re.findall(r.text)) == 0:
                 self.verify_token = string_to_hex(self.code)
                 return r
+        raise ProviderError('Zimuku verification did not complete after 6 attempts')
 
     def initialize(self):
         self.session = Session()
@@ -241,12 +254,17 @@ class ZimukuProvider(Provider):
         pattern = r"url\s*=\s*'([^']*)'\s*\+\s*url"
         parts = re.findall(pattern, html)
         redirect_url = search_link
-        while parts:
+        for _ in range(6):
+            if not parts:
+                break
             parts.reverse()
             redirect_url = urljoin(self.server_url, "".join(parts))
+            self._wait()
             r = self.session.get(redirect_url, timeout=30)
             html = r.content.decode("utf-8", "ignore")
             parts = re.findall(pattern, html)
+        if parts:
+            raise ProviderError('Zimuku search redirect did not settle after 6 attempts')
         logger.debug("search url located: " + redirect_url)
 
         soup = ParserBeautifulSoup(
@@ -293,7 +311,7 @@ class ZimukuProvider(Provider):
         # query for subtitles with the show_id
         for title in titles:
             if isinstance(video, Episode):
-                subtitles += [
+                found = [
                     s
                     for s in self.query(
                         title,
@@ -303,12 +321,18 @@ class ZimukuProvider(Provider):
                     )
                     if s.language in languages
                 ]
+                for subtitle in found:
+                    subtitle.video = video
+                subtitles += found
             elif isinstance(video, Movie):
-                subtitles += [
+                found = [
                     s
                     for s in self.query(title, year=video.year)
                     if s.language in languages
                 ]
+                for subtitle in found:
+                    subtitle.video = video
+                subtitles += found
 
         return subtitles
 
@@ -351,7 +375,7 @@ class ZimukuProvider(Provider):
                 )
                 return
             archive = rarfile.RarFile(archive_stream)
-            subtitle_content = _get_subtitle_from_archive(archive)
+            subtitle_content = _get_subtitle_from_archive(archive, subtitle)
         elif zipfile.is_zipfile(archive_stream):
             logger.debug("Identified zip archive")
             if ".zip" not in filename:
@@ -360,7 +384,7 @@ class ZimukuProvider(Provider):
                 )
                 return
             archive = zipfile.ZipFile(archive_stream)
-            subtitle_content = _get_subtitle_from_archive(archive)
+            subtitle_content = _get_subtitle_from_archive(archive, subtitle)
         else:
             is_sub = ""
             for sub_ext in SUBTITLE_EXTENSIONS:
@@ -381,34 +405,21 @@ class ZimukuProvider(Provider):
             logger.debug("Could not extract subtitle from %r", archive)
 
 
-def _get_subtitle_from_archive(archive):
-    extract_subname, max_score = "", -1
-
-    for subname in archive.namelist():
-        # discard hidden files
-        if os.path.split(subname)[-1].startswith("."):
-            continue
-
-        # discard non-subtitle files
-        if not subname.lower().endswith(SUBTITLE_EXTENSIONS):
-            continue
-
-        # prefer ass/ssa/srt subtitles with double languages or simplified/traditional chinese
-        score = ("ass" in subname or "ssa" in subname or "srt" in subname) * 1
-        if "简体" in subname or "chs" in subname or ".gb." in subname:
-            score += 2
-        if "繁体" in subname or "cht" in subname or ".big5." in subname:
-            score += 2
-        if "chs.eng" in subname or "chs&eng" in subname or "cht.eng" in subname or "cht&eng" in subname:
-            score += 2
-        if "中英" in subname or "简英" in subname or "繁英" in subname or "双语" in subname or "简体&英文" in subname or "繁体&英文" in subname:
-            score += 4
-        logger.debug("subtitle {}, score: {}".format(subname, score))
-        if score > max_score:
-            max_score = score
-            extract_subname = subname
-
-    return archive.read(extract_subname) if max_score != -1 else None
+def _get_subtitle_from_archive(archive, subtitle):
+    video = getattr(subtitle, 'video', None)
+    selected = select_archive_entry(
+        archive.namelist(),
+        season=getattr(video, 'season', None),
+        episode=getattr(video, 'episode', None),
+        absolute_episode=getattr(video, 'absolute_episode', None),
+        desired_language=str(subtitle.language),
+        hearing_impaired=subtitle.hearing_impaired,
+        forced=subtitle.language.forced,
+    )
+    if selected:
+        logger.info("Using %s from Zimuku archive", selected)
+        return archive.read(selected)
+    return None
 
 
 def _extract_name(name):

@@ -6,7 +6,7 @@ ARG REVISION=local
 LABEL org.opencontainers.image.source="https://github.com/finalpi/bazarr" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.description="Bazarr with subtitle timing validation, contextual translation, and styled ASS output"
-COPY bazarr/app/config.py bazarr/app/database.py /app/bazarr/bin/bazarr/app/
+COPY bazarr/app/config.py bazarr/app/database.py bazarr/app/get_providers.py /app/bazarr/bin/bazarr/app/
 COPY bazarr/api/__init__.py /app/bazarr/bin/bazarr/api/__init__.py
 COPY bazarr/api/subtitles/subtitles.py /app/bazarr/bin/bazarr/api/subtitles/subtitles.py
 COPY bazarr/api/subtitles/subtitles_info.py /app/bazarr/bin/bazarr/api/subtitles/subtitles_info.py
@@ -18,6 +18,8 @@ COPY bazarr/subtitles/tools/delete.py /app/bazarr/bin/bazarr/subtitles/tools/del
 COPY bazarr/subtitles/tools/translate/main.py bazarr/subtitles/tools/translate/traditional.py bazarr/subtitles/tools/translate/openai_profiles.py /app/bazarr/bin/bazarr/subtitles/tools/translate/
 COPY bazarr/subtitles/tools/translate/services/translator_factory.py bazarr/subtitles/tools/translate/services/openai_translator.py /app/bazarr/bin/bazarr/subtitles/tools/translate/services/
 COPY custom_libs/subliminal_patch/core.py custom_libs/subliminal_patch/core_persistent.py /app/bazarr/bin/custom_libs/subliminal_patch/
+COPY custom_libs/subliminal_patch/chinese.py /app/bazarr/bin/custom_libs/subliminal_patch/chinese.py
+COPY custom_libs/subliminal_patch/providers/subhd.py custom_libs/subliminal_patch/providers/r3sub.py custom_libs/subliminal_patch/providers/localsibling.py custom_libs/subliminal_patch/providers/subdl.py custom_libs/subliminal_patch/providers/utils.py custom_libs/subliminal_patch/providers/zimuku.py /app/bazarr/bin/custom_libs/subliminal_patch/providers/
 COPY frontend/build/ /app/bazarr/bin/frontend/build/
 RUN pip install --no-cache-dir opencc-python-reimplemented==0.1.7 && \
     python3 -m compileall -q /app/bazarr/bin/bazarr/api /app/bazarr/bin/bazarr/jellyfin /app/bazarr/bin/bazarr/subtitles /app/bazarr/bin/custom_libs/subliminal_patch /app/bazarr/bin/bazarr/app/config.py

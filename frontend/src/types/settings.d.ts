@@ -20,6 +20,7 @@ interface Settings {
   legendasdivx: Settings.Legandasdivx;
   xsubs: Settings.XSubs;
   assrt: Settings.Assrt;
+  r3sub: Settings.R3Sub;
   napisy24: Settings.Napisy24;
   betaseries: Settings.Betaseries;
   titlovi: Settings.Titlovi;
@@ -307,5 +308,10 @@ declare namespace Settings {
 
   interface Assrt {
     token?: string;
+  }
+
+  interface R3Sub {
+    email?: string;
+    password?: string;
   }
 }

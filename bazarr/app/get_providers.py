@@ -199,6 +199,8 @@ def get_providers():
     providers_list = []
     existing_providers = provider_registry.names()
     providers = [x for x in settings.general.enabled_providers if x in existing_providers]
+    if 'localsibling' in existing_providers and 'localsibling' not in providers:
+        providers.append('localsibling')
     for provider in providers:
         reason, until, throttle_desc = tp.get(provider, (None, None, None))
         providers_list.append(provider)
@@ -281,6 +283,10 @@ def get_providers_auth():
         },
         'assrt': {
             'token': settings.assrt.token,
+        },
+        'r3sub': {
+            'email': settings.r3sub.email,
+            'password': settings.r3sub.password,
         },
         'napisy24': {
             'username': settings.napisy24.username,
