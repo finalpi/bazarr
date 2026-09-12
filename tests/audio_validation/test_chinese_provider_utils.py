@@ -76,6 +76,20 @@ def test_subhd_title_only_result_does_not_claim_an_episode_match():
     assert 'episode' not in matches
 
 
+def test_subhd_does_not_claim_mismatched_release_metadata():
+    video = Episode('/tmp/The.Simpsons.S37E02.mkv', 'The Simpsons', 37, 2,
+                    source='Web', resolution='1080p', release_group='playWEB',
+                    alternative_series=['辛普森一家'])
+    subtitle = SubhdSubtitle(
+        Language('zho', 'CN'), 'fenix', 'https://subhd.me/a/fenix',
+        '辛普森一家 The Simpsons S37E02 720p HDTV x264-FENiX', video)
+    matches = subtitle.get_matches(video)
+    assert {'series', 'year', 'season', 'episode'} <= matches
+    assert 'source' not in matches
+    assert 'resolution' not in matches
+    assert 'release_group' not in matches
+
+
 def test_r3sub_search_parser_extracts_id_and_file_list():
     body = '''
       <div class="movie movie--preview">
@@ -154,4 +168,19 @@ def test_r3sub_uses_dedicated_proxy_only_after_direct_cloudflare_403():
         assert provider._curl('https://forum.r3sub.com/entry/signin') == b'ok'
     assert provider._use_proxy is True
     assert '-x' not in run.call_args_list[0].args[0]
-    assert run.call_args_list[1].args[0][1:3] == ['-x', provider._proxy_url]
+    proxy_args = run.call_args_list[1].args[0]
+    assert proxy_args[proxy_args.index('-x') + 1] == provider._proxy_url
+
+
+def test_subhd_uses_dedicated_proxy_only_after_direct_rate_limit():
+    provider = SubhdProvider()
+    provider._proxy_url = 'http://host.docker.internal:7890'
+    forbidden = subprocess.CalledProcessError(22, ['curl'], stderr=b'HTTP 403')
+    success = subprocess.CompletedProcess(['curl'], 0, stdout=b'ok', stderr=b'')
+    with patch.object(provider, '_wait'), \
+            patch('subliminal_patch.providers.subhd.subprocess.run', side_effect=[forbidden, success]) as run:
+        assert provider._request('https://subhd.me/api/sub/prepare-download') == b'ok'
+    assert provider._use_proxy is True
+    assert '-x' not in run.call_args_list[0].args[0]
+    proxy_args = run.call_args_list[1].args[0]
+    assert proxy_args[proxy_args.index('-x') + 1] == provider._proxy_url
