@@ -63,7 +63,10 @@ class JellyfinClient:
     def refresh_item(self, item_id: str) -> None:
         """POST /Items/{itemId}/Refresh — trigger metadata refresh for a specific item."""
         self.post(f'/Items/{item_id}/Refresh', params={
-            'metadataRefreshMode': 'ValidationOnly',
+            # ValidationOnly can return 204 without re-enumerating newly added
+            # external subtitle streams. Default performs the required media
+            # probe without replacing existing metadata or images.
+            'metadataRefreshMode': 'Default',
             'imageRefreshMode': 'None',
             'replaceAllMetadata': 'false',
             'replaceAllImages': 'false',

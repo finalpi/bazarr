@@ -4,6 +4,8 @@
 import os
 import sys
 import logging
+import threading
+import time
 
 from subzero.language import Language
 from subliminal_patch.core import save_subtitles
@@ -35,6 +37,9 @@ from .sync import sync_subtitles
 from .post_processing import postprocessing
 from plex.operations import plex_set_movie_added_date_now, plex_set_episode_added_date_now, plex_refresh_item
 from jellyfin.operations import jellyfin_refresh_item
+
+
+_jellyfin_upload_refresh_lock = threading.Lock()
 
 
 def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, filename, audio_language, job_id=None,
@@ -221,9 +226,14 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
                 if settings.plex.set_episode_added:
                     plex_set_episode_added_date_now(episode_metadata)
             if settings.general.use_jellyfin and settings.jellyfin.update_series_library:
-                jellyfin_refresh_item(episode_metadata.imdbId, is_movie=False,
-                                      season=episode_metadata.season, episode=episode_metadata.episode,
-                                      tvdb_id=episode_metadata.tvdbId)
+                # Jellyfin may accept concurrent item refresh requests with 204
+                # while silently skipping some media probes. Serialize refreshes
+                # from a season upload and leave a small gap between requests.
+                with _jellyfin_upload_refresh_lock:
+                    jellyfin_refresh_item(episode_metadata.imdbId, is_movie=False,
+                                          season=episode_metadata.season, episode=episode_metadata.episode,
+                                          tvdb_id=episode_metadata.tvdbId)
+                    time.sleep(1)
         else:
             store_subtitles_movie(radarrId)
             history_log_movie(4, radarrId, result, fake_provider=provider, fake_score=MAX_SCORES['movie'])
