@@ -6,13 +6,14 @@ import io
 import logging
 import os
 import re
-from urllib.parse import urljoin
+import subprocess
+import tempfile
+from urllib.parse import urlencode, urljoin, urlparse
 from zipfile import ZipFile, is_zipfile
 
 import rarfile
 from bs4 import BeautifulSoup
 from guessit import guessit
-from requests import Session
 from subzero.language import Language
 from subliminal import Episode, Movie
 from subliminal.exceptions import AuthenticationError, ConfigurationError, ProviderError
@@ -83,29 +84,79 @@ class R3subProvider(Provider):
             raise ConfigurationError('R3Sub email and password are required')
         self.email = email
         self.password = password
-        self.session = None
+        self._temporary_directory = None
+        self._cookie_jar = None
+        self._proxy_url = None
+        self._use_proxy = False
 
     def initialize(self):
-        self.session = Session()
-        self.session.headers.update({'User-Agent': _UA})
+        self._proxy_url = os.environ.get('R3SUB_PROXY_URL')
+        if self._proxy_url:
+            parsed = urlparse(self._proxy_url)
+            if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+                raise ConfigurationError('R3SUB_PROXY_URL must be an HTTP or HTTPS proxy URL')
+        self._use_proxy = False
+        self._temporary_directory = tempfile.TemporaryDirectory(prefix='bazarr-r3sub-')
+        self._cookie_jar = os.path.join(self._temporary_directory.name, 'cookies.txt')
         self._login()
 
     def terminate(self):
-        if self.session:
-            self.session.close()
+        if self._temporary_directory:
+            self._temporary_directory.cleanup()
+        self._temporary_directory = None
+        self._cookie_jar = None
+        self._use_proxy = False
+
+    def _curl(self, url, data=None, referer=None, timeout=20):
+        args = ['curl', '-sS', '--fail-with-body', '--max-time', str(timeout),
+                '-A', _UA, '-b', self._cookie_jar, '-c', self._cookie_jar]
+        if referer:
+            args.extend(['-H', 'Referer: ' + referer])
+        if data is not None:
+            args.extend(['-H', 'Content-Type: application/x-www-form-urlencoded',
+                         '--data', urlencode(data)])
+        args.extend(['-L', url])
+
+        def run(proxy_url=None):
+            request_args = list(args)
+            if proxy_url:
+                request_args[1:1] = ['-x', proxy_url]
+            return subprocess.run(
+                request_args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+
+        if self._use_proxy:
+            return run(self._proxy_url)
+        try:
+            return run()
+        except subprocess.CalledProcessError as error:
+            # Prefer the direct route. Cloudflare currently challenges some
+            # server-side TLS fingerprints with HTTP 403; only then retain the
+            # dedicated R3Sub proxy for the rest of this provider session.
+            if not self._proxy_url or b'403' not in (error.stderr or b''):
+                raise
+            logger.info('R3Sub direct access was challenged; using its dedicated proxy for this session')
+            self._use_proxy = True
+            return run(self._proxy_url)
+
+    def _has_cookie(self, name):
+        try:
+            with open(self._cookie_jar, encoding='utf-8', errors='replace') as cookie_file:
+                return any(line.rstrip().split('\t')[-2:-1] == [name]
+                           for line in cookie_file if line and not line.startswith('#'))
+        except OSError:
+            return False
 
     def _login(self):
-        page = self.session.get(_SIGN_IN, timeout=20)
-        page.raise_for_status()
-        soup = BeautifulSoup(page.text, 'html.parser')
+        page = self._curl(_SIGN_IN, timeout=20).decode('utf-8', 'replace')
+        soup = BeautifulSoup(page, 'html.parser')
         form = soup.find('form', action=re.compile(r'entry/signin')) or soup.find('form')
         payload = {}
         if form:
             for field in form.find_all('input', attrs={'name': True}):
                 payload[field['name']] = field.get('value', '')
         payload.update({'Email': self.email, 'Password': self.password, 'Sign In': 'Sign In'})
-        response = self.session.post(_SIGN_IN, data=payload, timeout=20, allow_redirects=False)
-        if not any(cookie.name == 'R3_Vid' for cookie in self.session.cookies):
+        self._curl(_SIGN_IN, data=payload, referer=_SIGN_IN, timeout=20)
+        if not self._has_cookie('R3_Vid'):
             raise AuthenticationError('R3Sub login failed; verify the account and email confirmation')
 
     @staticmethod
@@ -131,16 +182,15 @@ class R3subProvider(Provider):
         seen = set()
         for title in title_variants(video)[:6]:
             for attempt in range(2):
-                response = self.session.get(
-                    _BASE + '/search.php', params={'s': title, 'type': 'movie'}, timeout=20)
-                response.raise_for_status()
-                if 'entry/signin' not in response.url and 'Form_User_SignIn' not in response.text:
+                search_url = _BASE + '/search.php?' + urlencode({'s': title, 'type': 'movie'})
+                body = self._curl(search_url, timeout=20).decode('utf-8', 'replace')
+                if 'Form_User_SignIn' not in body and 'entry/signin' not in body:
                     break
                 if attempt == 0:
                     self._login()
             else:
                 raise AuthenticationError('R3Sub session expired and could not be renewed')
-            for subtitle_id, release, files in self._parse_search(response.text):
+            for subtitle_id, release, files in self._parse_search(body):
                 for language in languages:
                     key = (subtitle_id, str(language))
                     if key not in seen:
@@ -159,9 +209,8 @@ class R3subProvider(Provider):
         return values if values.get('id') else None
 
     def download_subtitle(self, subtitle):
-        show = self.session.get(subtitle.page_link, timeout=20)
-        show.raise_for_status()
-        soup = BeautifulSoup(show.text, 'html.parser')
+        show = self._curl(subtitle.page_link, timeout=20).decode('utf-8', 'replace')
+        soup = BeautifulSoup(show, 'html.parser')
         filename_field = soup.find('input', attrs={'name': 'filename'})
         files = [node.get('data-fname') for node in soup.find_all(attrs={'data-fname': True})]
         files = [name for name in files if name]
@@ -172,17 +221,17 @@ class R3subProvider(Provider):
             desired_language=str(subtitle.language))
         filename = filename_field.get('value') if filename_field else (selected or '')
         for language in ('zh', 'cn'):
-            intermediate = self.session.post(
-                _BASE + '/download.php', data={'id': subtitle.id, 'lang': language, 'filename': filename},
-                headers={'Referer': subtitle.page_link}, timeout=20)
-            values = self._form_values(intermediate.text)
+            intermediate = self._curl(
+                _BASE + '/download.php',
+                data={'id': subtitle.id, 'lang': language, 'filename': filename},
+                referer=subtitle.page_link, timeout=20).decode('utf-8', 'replace')
+            values = self._form_values(intermediate)
             if not values:
                 continue
-            response = self.session.post(
-                _BASE + '/jpdown1.php', data={'id': values['id'], 'lang': values.get('lang', language)},
-                headers={'Referer': _BASE + '/download.php'}, timeout=40)
-            response.raise_for_status()
-            content = response.content
+            content = self._curl(
+                _BASE + '/jpdown1.php',
+                data={'id': values['id'], 'lang': values.get('lang', language)},
+                referer=_BASE + '/download.php', timeout=40)
             stream = io.BytesIO(content)
             archive = None
             if is_zipfile(stream):
