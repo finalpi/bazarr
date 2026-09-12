@@ -96,21 +96,18 @@ const SeriesEpisodesView: FunctionComponent = () => {
 
   const onDrop = useCallback(
     (files: File[]) => {
-      if (series && profile) {
+      if (series) {
         modals.openContextModal(SeriesUploadModal, {
           files,
           series,
         });
       } else {
         showNotification(
-          notification.warn(
-            "Cannot Upload Files",
-            "series or language profile is not ready",
-          ),
+          notification.warn("Cannot Upload Files", "series is not ready"),
         );
       }
     },
-    [modals, profile, series],
+    [modals, series],
   );
 
   useDocumentTitle(
@@ -134,7 +131,7 @@ const SeriesEpisodesView: FunctionComponent = () => {
       <QueryOverlay result={seriesQuery}>
         <Dropzone.FullScreen
           openRef={openDropzone}
-          active={profile !== undefined}
+          active={series !== undefined}
           onDrop={onDrop}
         >
           <DropContent></DropContent>
@@ -213,7 +210,6 @@ const SeriesEpisodesView: FunctionComponent = () => {
               disabled={
                 series === undefined ||
                 series.episodeFileCount === 0 ||
-                series.profileId === null ||
                 !available ||
                 hasTask
               }

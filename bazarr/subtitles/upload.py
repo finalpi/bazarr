@@ -81,7 +81,9 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
             .first()
 
         if episode_metadata:
-            use_original_format = bool(get_profiles_list(episode_metadata.profileId)["originalFormat"])
+            profile = get_profiles_list(
+                episode_metadata.profileId) if episode_metadata.profileId else None
+            use_original_format = bool(profile["originalFormat"]) if profile else True
         else:
             return
     else:
@@ -92,7 +94,9 @@ def manual_upload_subtitle(path, language, forced, hi, media_type, subtitle, fil
             .first()
 
         if movie_metadata:
-            use_original_format = bool(get_profiles_list(movie_metadata.profileId)["originalFormat"])
+            profile = get_profiles_list(
+                movie_metadata.profileId) if movie_metadata.profileId else None
+            use_original_format = bool(profile["originalFormat"]) if profile else True
         else:
             return
 
