@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import os
+import copy
 import random
 import re
 import subprocess
@@ -22,7 +23,7 @@ from subzero.language import Language
 from subliminal import Episode, Movie
 from subliminal.subtitle import fix_line_ending
 
-from subliminal_patch.chinese import normalize_name, select_archive_entry, title_variants
+from subliminal_patch.chinese import normalize_name, rank_archive_entries, title_variants
 from subliminal_patch.providers import Provider
 from subliminal_patch.subtitle import Subtitle, guess_matches
 
@@ -79,7 +80,7 @@ def _extract_download(content, subtitle):
     names, reader, closer = _archive_names_and_reader(content)
     if names is not None:
         try:
-            selected = select_archive_entry(
+            ranked = rank_archive_entries(
                 names,
                 season=getattr(subtitle.video, 'season', None),
                 episode=getattr(subtitle.video, 'episode', None),
@@ -88,11 +89,20 @@ def _extract_download(content, subtitle):
                 hearing_impaired=subtitle.hearing_impaired,
                 forced=subtitle.language.forced,
             )
-            if not selected:
-                return None, None
-            extracted = reader(selected)
-            extension = os.path.splitext(selected)[1].lstrip('.').lower()
-            return extracted, _detect_subtitle_format(extracted, extension)
+            for selected in ranked:
+                extracted = reader(selected)
+                extension = os.path.splitext(selected)[1].lstrip('.').lower()
+                subtitle_format = _detect_subtitle_format(extracted, extension)
+                candidate = copy.copy(subtitle)
+                candidate.content = fix_line_ending(extracted)
+                candidate.use_original_format = True
+                candidate.format = subtitle_format
+                candidate._is_valid = False
+                candidate._guessed_encoding = None
+                if candidate.is_valid():
+                    return extracted, subtitle_format
+                logger.debug('Skipping invalid SubHD archive member: %s', selected)
+            return None, None
         finally:
             closer()
 
@@ -131,11 +141,6 @@ class SubhdSubtitle(Subtitle):
             if exact:
                 matches.update(('season', 'episode'))
             elif season_pack and not has_episode:
-                matches.update(('season', 'episode'))
-            elif 'series' in matches and not has_episode:
-                # Title-only results are commonly complete-series archives.
-                # The shared archive selector and audio validator remain the
-                # authoritative episode checks after download.
                 matches.update(('season', 'episode'))
             if {'series', 'season', 'episode'} <= matches:
                 matches.update(('year', 'source', 'release_group', 'audio_codec', 'resolution',
@@ -207,8 +212,12 @@ class SubhdProvider(Provider):
     def list_subtitles(self, video, languages):
         subtitles = []
         seen = set()
-        for title in title_variants(video)[:6]:
-            query = title
+        titles = title_variants(video)[:6]
+        queries = []
+        if isinstance(video, Episode):
+            queries.extend('%s S%02dE%02d' % (title, video.season, video.episode) for title in titles)
+        queries.extend(titles)
+        for query in queries:
             found_for_title = False
             for host in _SEARCH_MIRRORS:
                 try:

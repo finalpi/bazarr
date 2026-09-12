@@ -8,6 +8,7 @@ from subliminal_patch.providers.localsibling import _language_matches, _same_wor
 from subliminal_patch.providers.r3sub import R3subProvider
 from subliminal_patch.providers.subhd import SubhdProvider, SubhdSubtitle, _detect_subtitle_format, _extract_download
 from subzero.language import Language
+from subliminal import Episode
 
 
 class Video:
@@ -63,6 +64,18 @@ def test_subhd_search_parser_keeps_the_longest_release_name():
     ]
 
 
+def test_subhd_title_only_result_does_not_claim_an_episode_match():
+    video = Episode('/tmp/The.Simpsons.S37E01.mkv', 'The Simpsons', 37, 1,
+                    alternative_series=['辛普森一家'])
+    subtitle = SubhdSubtitle(
+        Language('zho', 'CN'), 'movie', 'https://subhd.me/a/movie',
+        '辛普森一家 The Simpsons Movie 2007 BluRay 1080p', video)
+    matches = subtitle.get_matches(video)
+    assert 'series' in matches
+    assert 'season' not in matches
+    assert 'episode' not in matches
+
+
 def test_r3sub_search_parser_extracts_id_and_file_list():
     body = '''
       <div class="movie movie--preview">
@@ -81,6 +94,28 @@ def test_subhd_archive_extracts_exact_episode_and_keeps_declared_format():
     with ZipFile(output, 'w') as archive:
         archive.writestr('show.S01E02.CHS.ass', '[Script Info]\nwrong')
         archive.writestr('show.S01E01.CHS.srt', '1\n00:00:01,000 --> 00:00:02,000\n正确\n')
+    video = type('EpisodeVideo', (), {'season': 1, 'episode': 1, 'absolute_episode': None})()
+    subtitle = SubhdSubtitle(Language('zho', 'CN'), 'x', 'https://subhd.me/a/x', 'show', video)
+    content, subtitle_format = _extract_download(output.getvalue(), subtitle)
+    assert b'-->' in content
+    assert subtitle_format == 'srt'
+
+
+def test_subhd_archive_falls_back_when_preferred_ass_is_malformed():
+    output = io.BytesIO()
+    with ZipFile(output, 'w') as archive:
+        archive.writestr('show.S01E01.CHS.ass',
+                         '[Script Info]\n[V4+ Styles]\n'
+                         'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, '
+                         'OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, '
+                         'ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, '
+                         'MarginR, MarginV, Encoding\n'
+                         'Style: Default,Arial,20,&H00H202020,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,'
+                         '100,100,0,0,1,1,0,2,10,10,10,1\n'
+                         '[Events]\nFormat: Layer, Start, End, Style, Text\n'
+                         'Dialogue: 0,0:00:01.00,0:00:02.00,Default,错误\n')
+        archive.writestr('show.S01E01.CHS.srt',
+                         '1\n00:00:01,000 --> 00:00:02,000\n正确\n')
     video = type('EpisodeVideo', (), {'season': 1, 'episode': 1, 'absolute_episode': None})()
     subtitle = SubhdSubtitle(Language('zho', 'CN'), 'x', 'https://subhd.me/a/x', 'show', video)
     content, subtitle_format = _extract_download(output.getvalue(), subtitle)

@@ -100,12 +100,17 @@ def archive_entry_score(filename, season=None, episode=None, absolute_episode=No
 
 
 def select_archive_entry(names, **criteria):
+    ranked = rank_archive_entries(names, **criteria)
+    return ranked[0] if ranked else None
+
+
+def rank_archive_entries(names, **criteria):
     scored = []
     for index, name in enumerate(names):
         score = archive_entry_score(name, **criteria)
         if score is not None:
             scored.append((score, -index, name))
-    return max(scored)[2] if scored else None
+    return [item[2] for item in sorted(scored, reverse=True)]
 
 
 def title_variants(video):
