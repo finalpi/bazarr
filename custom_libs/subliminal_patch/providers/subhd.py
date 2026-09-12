@@ -21,6 +21,7 @@ from bs4 import BeautifulSoup
 from guessit import guessit
 from subzero.language import Language
 from subliminal import Episode, Movie
+from subliminal.exceptions import ConfigurationError
 from subliminal.subtitle import fix_line_ending
 
 from subliminal_patch.chinese import normalize_name, rank_archive_entries, title_variants
@@ -131,8 +132,6 @@ class SubhdSubtitle(Subtitle):
             matches.add('series' if isinstance(video, Episode) else 'title')
         if getattr(video, 'year', None) and str(video.year) in self.release_info:
             matches.add('year')
-        if re.search(r'(?i)\b(?:blu-?ray|b[dr]rip|web-?dl|webrip|hdtv|dvd)\b', self.release_info):
-            matches.add('source')
         if isinstance(video, Episode):
             exact = re.search(r'(?i)s0*%d\D*e(?:p)?0*%d(?:\D|$)' % (video.season, video.episode),
                               self.release_info)
@@ -143,11 +142,11 @@ class SubhdSubtitle(Subtitle):
             elif season_pack and not has_episode:
                 matches.update(('season', 'episode'))
             if {'series', 'season', 'episode'} <= matches:
-                matches.update(('year', 'source', 'release_group', 'audio_codec', 'resolution',
-                                'video_codec', 'streaming_service', 'hearing_impaired'))
-        elif {'title', 'year'} <= matches:
-            matches.update(('source', 'edition', 'release_group', 'audio_codec', 'resolution',
-                            'video_codec', 'streaming_service', 'hearing_impaired'))
+                # TV releases rarely repeat the show's original premiere year.
+                # Exact series/season/episode identity is sufficient for this
+                # field; source, resolution and release group must still match
+                # the actual release metadata through guess_matches.
+                matches.add('year')
         return matches
 
 
@@ -158,12 +157,17 @@ class SubhdProvider(Provider):
 
     def __init__(self):
         self._last_request = 0.0
+        self._proxy_url = os.environ.get('SUBHD_PROXY_URL')
+        self._use_proxy = False
 
     def initialize(self):
-        pass
+        if self._proxy_url:
+            parsed = urlparse(self._proxy_url)
+            if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+                raise ConfigurationError('SUBHD_PROXY_URL must be an HTTP or HTTPS proxy URL')
 
     def terminate(self):
-        pass
+        self._use_proxy = False
 
     def _wait(self):
         delay = random.uniform(2.0, 5.0) - (time.monotonic() - self._last_request)
@@ -172,8 +176,11 @@ class SubhdProvider(Provider):
         self._last_request = time.monotonic()
 
     @staticmethod
-    def _curl(url, method='GET', body=None, cookie_jar=None, referer=None, headers_file=None, timeout=20):
+    def _curl(url, method='GET', body=None, cookie_jar=None, referer=None, headers_file=None,
+              timeout=20, proxy_url=None):
         args = ['curl', '-sS', '--fail-with-body', '--max-time', str(timeout), '-A', _USER_AGENT]
+        if proxy_url:
+            args.extend(['-x', proxy_url])
         if cookie_jar:
             args.extend(['-b', cookie_jar, '-c', cookie_jar])
         if headers_file:
@@ -192,7 +199,18 @@ class SubhdProvider(Provider):
 
     def _request(self, *args, **kwargs):
         self._wait()
-        return self._curl(*args, **kwargs)
+        if self._use_proxy:
+            return self._curl(*args, proxy_url=self._proxy_url, **kwargs)
+        try:
+            return self._curl(*args, **kwargs)
+        except subprocess.CalledProcessError as error:
+            stderr = error.stderr or b''
+            if not self._proxy_url or not any(code in stderr for code in (b'403', b'429')):
+                raise
+            logger.info('SubHD direct access was rate limited; using its dedicated proxy for this session')
+            self._use_proxy = True
+            self._wait()
+            return self._curl(*args, proxy_url=self._proxy_url, **kwargs)
 
     @staticmethod
     def _parse_results(body):
