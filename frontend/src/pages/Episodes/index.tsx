@@ -1,12 +1,13 @@
 import {
   FunctionComponent,
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import { Navigate, useParams } from "react-router";
-import { Container, Group, Stack } from "@mantine/core";
+import { Center, Container, Group, Stack, Text } from "@mantine/core";
 import { Dropzone } from "@mantine/dropzone";
 import { useDocumentTitle } from "@mantine/hooks";
 import { showNotification } from "@mantine/notifications";
@@ -26,6 +27,7 @@ import {
   faTriangleExclamation,
   faWrench,
 } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Table as TableInstance } from "@tanstack/table-core/build/lib/types";
 import {
   useEpisodesBySeriesId,
@@ -121,6 +123,54 @@ const SeriesEpisodesView: FunctionComponent = () => {
   );
 
   const openDropzone = useRef<VoidFunction>(null);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+
+  useEffect(() => {
+    if (!series) return undefined;
+
+    let dragDepth = 0;
+    const containsFiles = (event: DragEvent) =>
+      Array.from(event.dataTransfer?.types ?? []).includes("Files") ||
+      (event.dataTransfer?.files.length ?? 0) > 0;
+
+    const handleDragEnter = (event: DragEvent) => {
+      if (!containsFiles(event)) return;
+      dragDepth += 1;
+      setIsDraggingFiles(true);
+    };
+
+    const handleDragOver = (event: DragEvent) => {
+      if (!containsFiles(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    };
+
+    const handleDragLeave = () => {
+      if (dragDepth === 0) return;
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) setIsDraggingFiles(false);
+    };
+
+    const handleDrop = (event: DragEvent) => {
+      if (!containsFiles(event) || !event.dataTransfer) return;
+      event.preventDefault();
+      dragDepth = 0;
+      setIsDraggingFiles(false);
+      const files = Array.from(event.dataTransfer.files);
+      if (files.length > 0) onDrop(files);
+    };
+
+    document.addEventListener("dragenter", handleDragEnter);
+    document.addEventListener("dragover", handleDragOver);
+    document.addEventListener("dragleave", handleDragLeave);
+    document.addEventListener("drop", handleDrop);
+    return () => {
+      document.removeEventListener("dragenter", handleDragEnter);
+      document.removeEventListener("dragover", handleDragOver);
+      document.removeEventListener("dragleave", handleDragLeave);
+      document.removeEventListener("drop", handleDrop);
+    };
+  }, [onDrop, series]);
 
   if (isNaN(id) || (isFetched && !series)) {
     return <Navigate to={RouterNames.NotFound}></Navigate>;
@@ -131,11 +181,27 @@ const SeriesEpisodesView: FunctionComponent = () => {
       <QueryOverlay result={seriesQuery}>
         <Dropzone.FullScreen
           openRef={openDropzone}
-          active={series !== undefined}
+          active={false}
           onDrop={onDrop}
         >
           <DropContent></DropContent>
         </Dropzone.FullScreen>
+        {isDraggingFiles && (
+          <Center
+            pos="fixed"
+            inset={0}
+            bg="rgba(0, 0, 0, 0.72)"
+            style={{ zIndex: 9999, pointerEvents: "none" }}
+          >
+            <Stack align="center" gap="sm">
+              <FontAwesomeIcon icon={faCloudUploadAlt} size="4x" />
+              <Text size="xl" fw={700} c="white">
+                Drop subtitles to upload
+              </Text>
+              <Text c="gray.3">Multiple ASS and SRT files are supported</Text>
+            </Stack>
+          </Center>
+        )}
         <Toolbox>
           <Group gap="xs">
             <Toolbox.Button
