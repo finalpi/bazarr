@@ -127,6 +127,21 @@ export const ProviderList: Readonly<ProviderInfo[]> = [
     ],
   },
   {
+    key: "subhd",
+    name: "SubHD",
+    description:
+      "Chinese subtitles with simplified, traditional, and bilingual releases",
+  },
+  {
+    key: "r3sub",
+    name: "R3Sub",
+    description: "Official Taiwan Traditional Chinese subtitles",
+    inputs: [
+      { type: "text", key: "email" },
+      { type: "password", key: "password" },
+    ],
+  },
+  {
     key: "betaseries",
     name: "BetaSeries",
     description: "French / English Provider for TV Shows Only",

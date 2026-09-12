@@ -494,14 +494,20 @@ class SubdlProvider(Provider):
                     absolute_episode = getattr(self.video, 'absolute_episode', None)
                     content = utils.get_subtitle_from_archive(
                         archive,
+                        season=getattr(self.video, 'season', None),
                         episode=target_episode,
                         episode_title=getattr(self.video, 'title', None),
+                        desired_language=str(subtitle.language),
+                        hearing_impaired=subtitle.hearing_impaired,
+                        absolute_episode=absolute_episode,
                     )
                     # Fallback: try absolute episode number
                     if content is None and absolute_episode:
                         content = utils.get_subtitle_from_archive(
                             archive,
                             episode=absolute_episode,
+                            desired_language=str(subtitle.language),
+                            hearing_impaired=subtitle.hearing_impaired,
                         )
                     if content is not None:
                         subtitle.content = content
@@ -510,13 +516,13 @@ class SubdlProvider(Provider):
                         subtitle.content = None
                 else:
                     # Single episode: prefer subtitle file extensions, fallback to first file
-                    for name in archive.namelist():
-                        if name.endswith(('.srt', '.sub', '.ssa', '.ass')):
-                            subtitle.content = fix_line_ending(archive.read(name))
-                            return
-                    for name in archive.namelist():
-                        subtitle.content = fix_line_ending(archive.read(name))
-                        return
+                    subtitle.content = utils.get_subtitle_from_archive(
+                        archive,
+                        desired_language=str(subtitle.language),
+                        hearing_impaired=subtitle.hearing_impaired,
+                        get_first_subtitle=True,
+                    )
+                    return
             elif subtitle.is_direct_file:
                 # subdl unpack=1: response is a raw subtitle file, not a ZIP
                 subtitle.content = fix_line_ending(r.content)

@@ -16,6 +16,7 @@ from subliminal.utils import sanitize_release_group
 from subliminal_patch.exceptions import MustGetBlacklisted
 from subliminal_patch.core import Episode
 from subliminal_patch.subtitle import guess_matches
+from subliminal_patch.chinese import select_archive_entry
 
 from ._agent_list import FIRST_THOUSAND_OR_SO_USER_AGENTS
 
@@ -110,7 +111,8 @@ def _analize_sub_name(sub_name: str, title_: str):
 
 
 def get_subtitle_from_archive(
-    archive, forced=False, episode=None, get_first_subtitle=False, **kwargs
+    archive, forced=False, episode=None, get_first_subtitle=False,
+    desired_language=None, hearing_impaired=False, absolute_episode=None, season=None, **kwargs
 ):
     "Get subtitle from Rarfile/Zipfile object. Return None if nothing is found."
     subs_in_archive = [
@@ -125,9 +127,18 @@ def get_subtitle_from_archive(
 
     logger.debug("Subtitles in archive: %s", subs_in_archive)
 
+    ranked_sub = select_archive_entry(
+        subs_in_archive, season=season, episode=episode, absolute_episode=absolute_episode,
+        desired_language=desired_language, hearing_impaired=hearing_impaired, forced=forced)
+
     if len(subs_in_archive) == 1 or get_first_subtitle:
-        logger.debug("Getting first subtitle in archive: %s", subs_in_archive)
-        return fix_line_ending(archive.read(subs_in_archive[0]))
+        selected = ranked_sub or subs_in_archive[0]
+        logger.debug("Getting ranked subtitle in archive: %s", selected)
+        return fix_line_ending(archive.read(selected))
+
+    if ranked_sub is not None and (season is not None or absolute_episode is not None or desired_language):
+        logger.info("Using highest-ranked subtitle from archive: %s", ranked_sub)
+        return fix_line_ending(archive.read(ranked_sub))
 
     matching_sub = _get_matching_sub(subs_in_archive, forced, episode, **kwargs)
 

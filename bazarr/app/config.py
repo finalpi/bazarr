@@ -426,6 +426,9 @@ validators = [
 
     # assrt section
     Validator('assrt.token', must_exist=True, default='', is_type_of=str, cast=str),
+    # r3sub section
+    Validator('r3sub.email', must_exist=True, default='', is_type_of=str, cast=str),
+    Validator('r3sub.password', must_exist=True, default='', is_type_of=str, cast=str),
 
     # anticaptcha section
     Validator('anticaptcha.anti_captcha_key', must_exist=True, default='', is_type_of=str),
