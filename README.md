@@ -49,7 +49,7 @@ The `master` branch and its Docker image extend Bazarr with a subtitle workflow 
 - Translate Simplified Chinese once and create Traditional Chinese locally with OpenCC, avoiding a second LLM request.
 - Save LLM subtitles as styled ASS files with separate `Chinese` and `Original` styles. The fansub-inspired defaults put larger bold yellow Chinese above smaller white original text; both styles and the bottom margin can be adjusted independently with a live preview under **Settings > Subtitles > LLM Subtitle Appearance**.
 - Send configured Apprise notifications, including Telegram, when an LLM translation completes or fails. Success messages include the target language, model, and output filename; failure messages include a short redacted reason.
-- Notify Jellyfin after subtitle downloads, uploads, deletions, synchronization, and translations. Configure the Jellyfin server, API key, libraries, and immediate or asynchronous refresh under **Settings > Jellyfin**.
+- Notify Jellyfin after subtitle downloads, uploads, deletions, synchronization, and translations. Configure the Jellyfin server, API key, libraries, and immediate or asynchronous refresh under **Settings > Jellyfin**. Immediate refresh uses `Default` media probing so newly created external subtitles are enumerated; manual season uploads serialize episode refreshes with a short interval because Jellyfin may acknowledge concurrent requests while skipping some subtitle scans.
 
 Provider subtitles remain authoritative. LLM subtitles are retained as a fallback and do not stop Bazarr from searching for a matching provider subtitle. Embedded Chinese prevents an unnecessary LLM translation, but it does not count as an external downloaded Chinese subtitle.
 
