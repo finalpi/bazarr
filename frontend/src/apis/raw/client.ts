@@ -5,14 +5,7 @@ import { notification } from "@/modules/task";
 import { Environment } from "@/utilities";
 import { LOG } from "@/utilities/console";
 import { setAuthenticated } from "@/utilities/event";
-
-function GetErrorMessage(data: unknown, defaultMsg = "Unknown error"): string {
-  if (typeof data === "string") {
-    return data;
-  } else {
-    return defaultMsg;
-  }
-}
+import { getErrorMessage } from "./errors";
 
 class BazarrClient {
   axios!: AxiosInstance;
@@ -55,14 +48,14 @@ class BazarrClient {
         } else {
           const error: BackendError = {
             code: resp.status,
-            message: GetErrorMessage(resp.data),
+            message: getErrorMessage(resp.data),
           };
           this.handleError(error);
           return Promise.reject(resp);
         }
       },
       (error: AxiosError) => {
-        const message = GetErrorMessage(
+        const message = getErrorMessage(
           error.response?.data,
           "You have disconnected from the server",
         );
