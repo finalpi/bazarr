@@ -19,17 +19,21 @@ def test_removes_sound_cues_but_keeps_dialogue_and_source(tmp_path):
         '2\n00:00:02,000 --> 00:00:03,000\n[MUSIC]\n[LAUGHTER]\n\n'
         '3\n00:00:03,000 --> 00:00:04,000\n♪ OH, BABY, YOU ♪\n\n'
         '4\n00:00:04,000 --> 00:00:05,000\n[LAUGHS] Hello, Marge.\n\n'
-        '5\n00:00:05,000 --> 00:00:06,000\n♪ MUSIC ♪\nWe should leave now.\n', encoding='utf-8')
+        '5\n00:00:05,000 --> 00:00:06,000\n♪ BUT YOU SAY\nHE IS JUST A FRIEND ♪\nGODDAMN YOU!\n\n'
+        '6\n00:00:06,000 --> 00:00:07,000\n♪♪\nWe should leave now.\n', encoding='utf-8')
     original = source.read_bytes()
 
     with hi_filter.translation_source(str(source), Language('eng'), True) as filtered_path:
         filtered = pysubs2.load(filtered_path, encoding='utf-8')
         assert '[DOOR SLAMS]' not in Path(filtered_path).read_text(encoding='utf-8')
         assert '[MUSIC]' not in Path(filtered_path).read_text(encoding='utf-8')
-        assert 'OH, BABY' not in Path(filtered_path).read_text(encoding='utf-8')
+        assert '♪' not in Path(filtered_path).read_text(encoding='utf-8')
+        assert any('OH, BABY, YOU' in cue.text for cue in filtered)
+        assert any('BUT YOU SAY' in cue.text and 'HE IS JUST A FRIEND' in cue.text
+                   and 'GODDAMN YOU!' in cue.text for cue in filtered)
         assert any('Hello, Marge.' in cue.text for cue in filtered)
         assert any('We should leave now.' in cue.text for cue in filtered)
-        assert all(cue.start >= 4000 for cue in filtered)
+        assert all(cue.start >= 3000 for cue in filtered)
     assert not Path(filtered_path).exists()
     assert source.read_bytes() == original
 

@@ -278,10 +278,11 @@ class OpenAICompatibleTranslatorService:
                 '<br> only at a natural clause or word boundary when a break is necessary.'
             )
         hi_instruction = (
-            '13. Remove hearing-impaired descriptions (sound effects, music/lyrics, laughter, '
-            'speaker or action labels) from the translation, including when they are mixed '
-            'with dialogue. Translate all remaining spoken dialogue without losing its '
-            'meaning. If a requested cue contains no spoken dialogue, return exactly '
+            '13. Remove hearing-impaired descriptions (sound effects, music-playing labels, '
+            'laughter, speaker or action labels), including when mixed with speech or lyrics. '
+            'Keep and translate sung lyrics as content, even when they have music-note markers; '
+            'preserve all spoken dialogue and sung words. If a requested cue contains neither '
+            'speech nor lyrics, return exactly '
             '__OMIT_HI_CUE__ after its [number]; never omit or renumber an index.\n'
         ) if self.remove_hearing_impaired else ''
         target_ids = [item['index'] for item in targets]

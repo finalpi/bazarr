@@ -270,7 +270,7 @@ def test_hearing_impaired_prompt_omits_only_non_dialogue_cues(tmp_path):
 
         def json(self):
             return {'choices': [{'message': {'content':
-                    '[0] __OMIT_HI_CUE__\n[1] 快走'}}]}
+                    '[0] __OMIT_HI_CUE__\n[1] 快走\n[2] 噢，宝贝，你'}}]}
 
     def post(*args, **kwargs):
         captured.update(kwargs)
@@ -281,23 +281,30 @@ def test_hearing_impaired_prompt_omits_only_non_dialogue_cues(tmp_path):
     subtitles = pysubs2.SSAFile()
     subtitles.append(pysubs2.SSAEvent(start=1000, end=2000, text='[DOOR SLAMS]'))
     subtitles.append(pysubs2.SSAEvent(start=3000, end=4000, text='[LAUGHS] Run!'))
+    subtitles.append(pysubs2.SSAEvent(start=5000, end=6000, text='OH, BABY, YOU'))
     subtitles.save(source, format_='srt', encoding='utf-8')
     service = make_service(namespace, source, destination)
     targets = [{'index': 0, 'content': '[DOOR SLAMS]'},
-               {'index': 1, 'content': '[LAUGHS] Run!'}]
+               {'index': 1, 'content': '[LAUGHS] Run!'},
+               {'index': 2, 'content': 'OH, BABY, YOU'}]
 
     service._request(targets, targets, '')
-    assert 'Translate all remaining spoken dialogue' not in captured['json']['messages'][0]['content']
+    assert 'Keep and translate sung lyrics' not in captured['json']['messages'][0]['content']
     service.remove_hearing_impaired = True
-    assert service._request(targets, targets, '') == {0: '__OMIT_HI_CUE__', 1: '快走'}
+    assert service._request(targets, targets, '') == {
+        0: '__OMIT_HI_CUE__', 1: '快走', 2: '噢 宝贝 你'}
     prompt = captured['json']['messages'][0]['content']
-    assert 'Translate all remaining spoken dialogue' in prompt
+    assert 'Keep and translate sung lyrics' in prompt
+    assert 'neither speech nor lyrics' in prompt
     assert 'never omit or renumber an index' in prompt
-    service._translate_batch = lambda *args: {0: '__OMIT_HI_CUE__', 1: '快走'}
+    service._translate_batch = lambda targets, *args: {
+        item['index']: {0: '__OMIT_HI_CUE__', 1: '快走', 2: '噢 宝贝 你'}[item['index']]
+        for item in targets}
     assert service.translate(job_id=1) == str(destination)
     result = pysubs2.load(destination, encoding='utf-8')
-    assert [(cue.start, cue.end) for cue in result] == [(3000, 4000)]
+    assert [(cue.start, cue.end) for cue in result] == [(3000, 4000), (5000, 6000)]
     assert '快走' in result[0].text
+    assert '噢 宝贝 你' in result[1].text
 
 
 def test_request_normalizes_and_requires_dual_speaker_markers():

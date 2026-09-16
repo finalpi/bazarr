@@ -13,7 +13,7 @@ from subzero.modification import SubtitleModifications
 
 
 PURE_BRACKET_CUE = re.compile(r'^\s*-?\s*(?:\[[^\[\]\n]{3,}\]|\([^()\n]{3,}\))\s*$')
-PURE_MUSIC_CUE = re.compile(r'^\s*-?\s*[♪♫#¶*].*$', re.DOTALL)
+PURE_MUSIC_CUE = re.compile(r'^\s*-?\s*[♪♫]+\s*$')
 
 
 def _is_pure_hi_line(text):
@@ -37,7 +37,9 @@ def translation_source(source_path, language, remove_hearing_impaired=False):
 
     retained = []
     for entry in source:
-        lines = [line for line in entry.text.split(r'\N') if not _is_pure_hi_line(line)]
+        lines = [re.sub(r'[♪♫]', '', line).strip()
+                 for line in entry.text.split(r'\N') if not _is_pure_hi_line(line)]
+        lines = [line for line in lines if line]
         if lines:
             entry.text = r'\N'.join(lines)
             retained.append(entry)
