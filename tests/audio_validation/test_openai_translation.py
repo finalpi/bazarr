@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import unicodedata
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,7 +20,7 @@ from charset_normalizer import detect
 def load_translation_namespace(settings):
     source = ROOT / 'bazarr/subtitles/tools/translate/services/openai_translator.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
-    wanted = {'TranslationConstraintError', '_plain', 'normalize_chinese_translation',
+    wanted = {'TranslationConstraintError', '_plain', 'normalize_translation', '_display_width', '_word_char',
               '_speaker_marker_count', '_is_dual_speaker',
               'load_subtitles_with_encoding', 'wrap_translation', '_ass_color', '_ass_style',
               'apply_ass_style', '_extract_numbered', '_numbered',
@@ -27,7 +28,7 @@ def load_translation_namespace(settings):
     nodes = [node for node in tree.body if getattr(node, 'name', None) in wanted]
     namespace = {
         'json': json, 'logging': logging, 'logger': logging.getLogger(__name__), 'os': os, 're': re,
-        'time': __import__('time'), 'detect': detect,
+        'time': __import__('time'), 'unicodedata': unicodedata, 'detect': detect,
         'pysubs2': pysubs2, 'requests': SimpleNamespace(RequestException=Exception),
         'settings': settings, 'jobs_queue': SimpleNamespace(update_job_progress=lambda **kwargs: None),
         'get_description': lambda *args: 'Criminal Minds season 1',
@@ -77,7 +78,7 @@ def make_service(namespace, source, destination):
         forced=False, hi=False, video_path='video.mp4', from_lang='en', orig_to_lang='zh')
 
 
-def test_wraps_chinese_at_punctuation_and_parses_numbered_output():
+def test_wraps_text_by_display_width_and_parses_numbered_output():
     namespace = load_translation_namespace(translator_settings())
     wrapped = namespace['wrap_translation']('这是一句比较长的中文字幕，需要在合适的位置自动断句。', width=12)
     assert r'\N' in wrapped
@@ -90,13 +91,23 @@ def test_wraps_chinese_at_punctuation_and_parses_numbered_output():
     sentence = '好，很好。你开始能感知别人而不只是自己的感受了。'
     assert r'\N' not in namespace['wrap_translation'](sentence)
     assert namespace['wrap_translation']('这句很短<br>不应换行') == '这句很短不应换行'
+    assert namespace['wrap_translation']('See you<br>tomorrow') == 'See you tomorrow'
+    assert namespace['wrap_translation']('mañana<br>amigo') == 'mañana amigo'
+    assert namespace['wrap_translation']('Hola, amigo.<br>¿Cómo estás?') == 'Hola, amigo. ¿Cómo estás?'
     model_wrapped = namespace['wrap_translation'](
         '你已经开始理解其他人的真实感受<br>而不再只是关注自己的想法和处境。')
     assert model_wrapped == (
         '你已经开始理解其他人的真实感受' + r'\N' + '而不再只是关注自己的想法和处境。')
     clause = namespace['wrap_translation'](sentence, width=18)
     assert r'别\N人' not in clause
-    assert r'别人\N而' in clause
+    english = namespace['wrap_translation'](
+        'We should leave before it gets dark, and meet everyone outside the station.')
+    assert r'\N' in english
+    assert all(namespace['_display_width'](line) <= 48 for line in english.split(r'\N'))
+    assert r'sta\Ntion' not in english
+    spanish = namespace['wrap_translation']('Mañana nos encontraremos cerca de la estación central, después de almorzar.')
+    assert all(namespace['_display_width'](line) <= 48 for line in spanish.split(r'\N'))
+    assert r'estaci\Nón' not in spanish
     assert namespace['_extract_numbered']('```text\n[2] 你好\n[3] 再见\n```', [2, 3]) == {
         2: '你好', 3: '再见'}
     assert namespace['_extract_numbered']('2. 你好\n3) 再见', [2, 3]) == {
@@ -105,13 +116,13 @@ def test_wraps_chinese_at_punctuation_and_parses_numbered_output():
         20: '二十', 21: '二十一'}
 
 
-def test_normalizes_chinese_punctuation_and_dual_speakers():
+def test_preserves_target_punctuation_and_normalizes_dual_speakers():
     namespace = load_translation_namespace(translator_settings())
-    normalize = namespace['normalize_chinese_translation']
-    assert normalize('你好，朋友。你还好吗？') == '你好 朋友 你还好吗？'
-    assert normalize('价格是3.5元，编号F.B.I.。') == '价格是3.5元 编号F.B.I.'
-    assert normalize('— 你好吗？ — 我很好。') == '-你好吗？ -我很好'
-    assert normalize('我…我的意思是...') == '我…我的意思是…'
+    normalize = namespace['normalize_translation']
+    assert normalize('你好，朋友。你还好吗？') == '你好，朋友。你还好吗？'
+    assert normalize('价格是3.5元，编号F.B.I.。') == '价格是3.5元，编号F.B.I.。'
+    assert normalize('— 你好吗？ — 我很好。') == '-你好吗？ -我很好。'
+    assert normalize('我…我的意思是...') == '我…我的意思是...'
     assert namespace['_is_dual_speaker']('-How are you? -I am fine.')
     assert namespace['_speaker_marker_count']('-你好吗？ -我很好') == 2
 
@@ -176,7 +187,7 @@ def test_styled_ass_output_uses_configured_appearance(tmp_path):
 
     assert service.translate(job_id=1) == str(destination)
     result = pysubs2.load(destination, encoding='utf-8')
-    chinese_style = result.styles['Chinese']
+    chinese_style = result.styles['Target']
     original_style = result.styles['Original']
     assert result.info['PlayResX'] == '1920'
     assert result.info['PlayResY'] == '1080'
@@ -197,7 +208,7 @@ def test_styled_ass_output_uses_configured_appearance(tmp_path):
     assert original_style.shadow == 1
     assert chinese_style.marginv == original_style.marginv == 72
     assert [(cue.style, cue.text) for cue in result] == [
-        ('Original', 'Hello'), ('Chinese', '你好')]
+        ('Original', 'Hello'), ('Target', '你好')]
     assert result[0].start == result[1].start == 1000
     assert result[0].end == result[1].end == 2500
 
@@ -215,7 +226,7 @@ def test_styled_ass_chinese_only_does_not_duplicate_events(tmp_path):
 
     service.translate(job_id=1)
     result = pysubs2.load(destination, encoding='utf-8')
-    assert [(cue.style, cue.text) for cue in result] == [('Chinese', '你好')]
+    assert [(cue.style, cue.text) for cue in result] == [('Target', '你好')]
 
 
 def test_request_bounds_model_output_and_validates_indices():
@@ -263,7 +274,7 @@ def test_request_normalizes_and_requires_dual_speaker_markers():
     service = make_service(namespace, 'source.srt', 'translated.srt')
     target = [{'index': 0, 'content': '-How are you? -I am fine.'}]
 
-    assert service._request(target, target, '') == {0: '-你好吗 -我很好'}
+    assert service._request(target, target, '') == {0: '-你好吗， -我很好。'}
 
     content['value'] = '[0] 你好吗 我很好'
     with pytest.raises(ValueError, match='violated dual-speaker constraints'):
@@ -294,14 +305,14 @@ def test_request_prompts_name_policy_by_source_language_without_enforcement():
     target = [{'index': 0, 'content': 'Marge, come here.'}]
 
     assert service._request(target, target, '') == {0: 'Marge 过来一下'}
-    assert 'Never translate or transliterate them' in captured['json']['messages'][0]['content']
+    assert 'Do not translate or transliterate them' in captured['json']['messages'][0]['content']
 
     content['value'] = '[0] 玛姬 过来一下'
     assert service._request(target, target, '') == {0: '玛姬 过来一下'}
 
     service.from_lang = 'ja'
     assert service._request(target, target, '') == {0: '玛姬 过来一下'}
-    assert 'established Simplified Chinese translations' in captured['json']['messages'][0]['content']
+    assert 'established target-language' in captured['json']['messages'][0]['content']
 
 
 def test_non_chinese_request_uses_target_language_and_preserves_punctuation():
@@ -323,7 +334,7 @@ def test_non_chinese_request_uses_target_language_and_preserves_punctuation():
     service = make_service(namespace, 'source.srt', 'translated.srt')
     service.to_lang = 'spa'
     targets = [{'index': 0, 'content': 'Hello, friend. How are you?'}]
-    assert service._request(targets, targets, '') == {0: r'Hola, amigo.\N¿Cómo estás?'}
+    assert service._request(targets, targets, '') == {0: 'Hola, amigo.<br>¿Cómo estás?'}
     prompt = captured['json']['messages'][0]['content']
     assert 'from en into natural spa' in prompt
     assert 'Do not use commas or periods in Chinese' not in prompt
@@ -343,7 +354,7 @@ def test_non_chinese_styled_ass_uses_target_style(tmp_path):
     result = pysubs2.load(destination, encoding='utf-8')
     assert [(cue.style, cue.text) for cue in result] == [
         ('Original', 'Hello'), ('Target', 'Hola, amigo.')]
-    assert result.styles['Target'].fontname == 'Arial'
+    assert result.styles['Target'].fontname == 'Noto Sans CJK SC'
 
 
 def test_constraint_retry_only_resubmits_invalid_lines():

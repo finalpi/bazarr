@@ -27,13 +27,14 @@ translated.
 The request also applies a batch-sized output-token limit so verbose local models
 cannot generate indefinitely and block all later translation batches.
 
-The translator preserves cue timestamps and uses deterministic punctuation-aware
-line wrapping. Styled bilingual ASS output creates separate `Chinese` and
-`Original` styles and two same-time events for each cue. The default presentation
-uses larger bold pale-yellow Chinese above smaller regular white original text,
+The translator preserves cue timestamps and uses the same display-width line
+wrapping for every target language, retaining target-language punctuation.
+Styled bilingual ASS output creates separate `Target` and `Original` styles and
+two same-time events for each cue. The default presentation uses larger bold
+pale-yellow translated text above smaller regular white original text,
 with black outlines and no shadow. Both styles can be adjusted independently under
 **Settings > Subtitles > LLM Subtitle Appearance**. Plain SRT bilingual output
-continues to write the original text followed by Chinese in each cue. The model is
+continues to write the original text followed by the translation in each cue. The model is
 never asked to invent or redistribute timestamps.
 
 ## Automatic Mode

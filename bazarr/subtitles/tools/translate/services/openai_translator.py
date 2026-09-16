@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import time
+import unicodedata
 
 import pysubs2
 import requests
@@ -34,16 +35,11 @@ def _plain(text):
     return re.sub(r'\s+', ' ', text.replace(r'\N', ' ').replace('\n', ' ')).strip()
 
 
-def normalize_chinese_translation(text):
-    """Apply the punctuation and speaker-marker rules used by Simplified Chinese subtitles."""
+def normalize_translation(text):
+    """Normalize speaker markers and spacing while retaining the target punctuation."""
     text = re.sub(r'(^|\s)[—–-]\s*(?=\S)', r'\1-', text)
-    text = re.sub(r'\.{3,}', '…', text)
-    text = re.sub(r'[，。]', ' ', text)
-    text = re.sub(r'(?<!\d),(?!\d)', ' ', text)
-    text = re.sub(r'(?<![A-Za-z0-9])\.(?![A-Za-z0-9])', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    text = re.sub(r'\s+([？！!?：:；;、”’》）】])', r'\1', text)
-    text = re.sub(r'([“‘《（【])\s+', r'\1', text)
+    text = re.sub(r'\s*<br\s*/?>\s*', '<br>', text, flags=re.I)
+    text = re.sub(r'[ \t]+', ' ', text).strip()
     return text
 
 
@@ -68,44 +64,53 @@ def load_subtitles_with_encoding(path):
         return pysubs2.load(path, encoding=encoding)
 
 
-def wrap_translation(text, width=24):
-    """Use a valid model-supplied break, or find a local clause boundary as fallback."""
+def _display_width(text):
+    return sum(2 if unicodedata.east_asian_width(char) in {'F', 'W'} else 1 for char in text)
+
+
+def _word_char(char):
+    return char.isalnum() and unicodedata.east_asian_width(char) not in {'F', 'W'}
+
+
+def wrap_translation(text, width=48):
+    """Use a model break or wrap at a word or punctuation boundary."""
     marked_parts = re.split(r'\s*<br\s*/?>\s*', text, flags=re.I)
-    text = _plain(''.join(marked_parts))
-    if len(text) <= width:
+    text = marked_parts[0]
+    for part in marked_parts[1:]:
+        if (text and part and
+                (_word_char(text[-1]) or text[-1] in ',.;:!?') and
+                (_word_char(part[0]) or part[0] in '¿¡“‘"')):
+            text += ' '
+        text += part
+    text = _plain(text)
+    if _display_width(text) <= width:
         return text
     if len(marked_parts) == 2:
         marked_lines = [_plain(part) for part in marked_parts]
-        if all(marked_lines) and all(len(line) <= width + 6 for line in marked_lines):
+        if all(marked_lines) and all(_display_width(line) <= width + 12 for line in marked_lines):
             return r'\N'.join(marked_lines)
-    line_count = int((len(text) + width - 1) / width)
-    no_start = '，。！？；：、”’》）】'
+    no_start = '，。！？；：、”’》）】,.;:!?'
     no_end = '“‘《（【'
-    clause_starts = ('但是', '不过', '然而', '所以', '因此', '而且', '如果', '虽然',
-                     '因为', '同时', '然后', '而', '但', '却')
     lines = []
     start = 0
-    for remaining_lines in range(line_count, 1, -1):
-        remaining = len(text) - start
-        target = start + int(round(remaining / remaining_lines))
-        lower = max(start + 1, target - 4)
-        upper = min(len(text) - (remaining_lines - 1), target + 4)
-        punctuation_breaks = [index for index in range(lower, upper + 1)
-                              if text[index - 1] in '，。！？；：、 ' and text[index] not in no_start]
-        clause_breaks = [index for index in range(lower, upper + 1)
-                         if any(text.startswith(word, index) for word in clause_starts)]
-        preferred_breaks = punctuation_breaks or clause_breaks
-        end = min(preferred_breaks, key=lambda index: abs(index - target)) if preferred_breaks else target
-        if (end < len(text) and text[end - 1].isascii() and text[end].isascii()
-                and text[end - 1].isalnum() and text[end].isalnum()):
-            word_start, word_end = end, end
-            while word_start > start and text[word_start - 1].isascii() and text[word_start - 1].isalnum():
+    while _display_width(text[start:]) > width:
+        limit = start + 1
+        while limit < len(text) and _display_width(text[start:limit + 1]) <= width:
+            limit += 1
+        candidates = [index for index in range(start + 1, limit + 1)
+                      if index < len(text) and
+                      (text[index - 1].isspace() or text[index - 1] in '，。！？；：、,.;:!?')
+                      and text[index] not in no_start]
+        end = candidates[-1] if candidates else limit
+        if end < len(text) and _word_char(text[end - 1]) and _word_char(text[end]):
+            word_start = end
+            while word_start > start and _word_char(text[word_start - 1]):
                 word_start -= 1
-            while word_end < len(text) and text[word_end].isascii() and text[word_end].isalnum():
-                word_end += 1
-            end = word_start if word_start > start else word_end
-        while end < len(text) and text[end] in no_start:
-            end += 1
+            if word_start > start:
+                end = word_start
+            else:
+                while end < len(text) and _word_char(text[end]):
+                    end += 1
         while end > start + 1 and text[end - 1] in no_end:
             end -= 1
         lines.append(text[start:end].strip())
@@ -139,37 +144,34 @@ def _ass_style(prefix, default_font, default_color, margin):
     )
 
 
-def apply_ass_style(subtitles, bilingual=False, chinese=True):
+def apply_ass_style(subtitles, bilingual=False):
     subtitles.info['PlayResX'] = '1920'
     subtitles.info['PlayResY'] = '1080'
     subtitles.info['ScaledBorderAndShadow'] = 'yes'
     subtitles.info['Collisions'] = 'Reverse'
     margin = int(settings.translator.openai_ass_bilingual_margin_v)
-    target_style = 'Chinese' if chinese else 'Target'
-    subtitles.styles[target_style] = _ass_style(
-        'openai_ass_chinese' if chinese else 'openai_ass_original',
-        'Noto Sans CJK SC' if chinese else 'Arial',
-        '#FFFF80' if chinese else '#FFFFFF', margin)
+    subtitles.styles['Target'] = _ass_style(
+        'openai_ass_chinese', 'Noto Sans CJK SC', '#FFFF80', margin)
     subtitles.styles['Original'] = _ass_style(
         'openai_ass_original', 'Arial', '#FFFFFF', margin)
 
     if not bilingual:
         for cue in subtitles:
-            cue.style = target_style
+            cue.style = 'Target'
         return subtitles
 
     events = []
     for cue in subtitles:
         original, separator, target_text = cue.text.partition(r'\N')
         if not separator:
-            cue.style = target_style
+            cue.style = 'Target'
             events.append(cue)
             continue
         original_cue = cue.copy()
         original_cue.text = original
         original_cue.style = 'Original'
         cue.text = target_text
-        cue.style = target_style
+        cue.style = 'Target'
         events.extend((original_cue, cue))
     subtitles.events = events
     return subtitles
@@ -237,54 +239,22 @@ class OpenAICompatibleTranslatorService:
 
     def _request(self, targets, context, description):
         profile = get_active_openai_profile()
-        chinese = self.to_lang == 'zho'
         source_language = language_from_alpha2(self.from_lang) or self.from_lang
         target_language = language_from_alpha3(self.to_lang) or self.to_lang
-        preserve_english_names = chinese and str(self.from_lang).lower() in {'en', 'eng'}
-        if preserve_english_names:
+        if str(self.from_lang).lower() in {'en', 'eng'}:
             name_instruction = (
-                '3. Keep personal names, character names, nicknames and speaker labels in their original '
-                'Latin spelling. Never translate or transliterate them into Chinese.'
-            )
-        elif chinese:
-            name_instruction = (
-                '3. Use established Simplified Chinese translations or transliterations for personal names '
-                'and keep them consistent.'
+                '3. Keep personal names, character names, nicknames and speaker labels in their '
+                'recognizable original Latin spelling. Do not translate or transliterate them.'
             )
         else:
             name_instruction = (
-                '3. Use established names and transliterations in the target language; '
-                'keep character names and speaker labels consistent.'
+                '3. Keep names and speaker labels consistent; use established target-language '
+                'forms or recognizable source spelling.'
             )
         target_ids = [item['index'] for item in targets]
         target_set = set(target_ids)
         surrounding = [item for item in context if item['index'] not in target_set]
-        if chinese:
-            prompt = (
-            'Translate the following %s audiovisual subtitles into polished Simplified Chinese.\n\n'
-            'Read all cues as one continuous scene and use adjacent cues only to understand pronouns, '
-            'fragments, tone, jokes, terminology and implied intent.\n\n'
-            'Requirements:\n'
-            '1. Produce concise, idiomatic spoken Chinese suitable for streaming subtitles.\n'
-            '2. Preserve the precise meaning, emotional intensity, speaker changes, names and technical terms.\n'
-            '%s\n'
-            '4. Correct malformed source wording only when the intended meaning is strongly supported by adjacent dialogue; otherwise preserve the ambiguity.\n'
-            '5. Never add unstated specifications, directions, relationships, actions or plot facts.\n'
-            '6. Never move information between cues or complete a sentence early. Each output must contain only information expressed in its matching source cue.\n'
-            '7. Preserve interruptions, hesitation and unfinished sentences with Chinese ellipses.\n'
-            '8. When two speakers share one cue, prefix both utterances with an ASCII hyphen and keep them on one physical line, exactly like: -你好吗？ -我很好\n'
-            '9. Preserve wordplay, catchphrases, cultural references and invented words with a concise Chinese adaptation; never flatten them into a generic meaning.\n'
-            '10. Do not use commas or periods in Chinese; replace each with one space. Keep question marks and necessary exclamation marks, colons, quotation marks and ellipses.\n'
-            '11. Prefer concise Chinese lines of 18 full-width characters or fewer. Never exceed 24 characters per display line; for a longer single-speaker translation, insert exactly one literal <br> at a natural clause boundary. Never split a word, name or fixed phrase.\n'
-            '12. Return every requested [number] exactly once and on one physical line; <br> is the only allowed line-break marker.\n'
-            '13. Output numbered translations only, without Markdown, explanations or source text.\n\n'
-            'Media context:\n%s\n\n'
-            'Surrounding context (understand only; do not output these numbers):\n%s\n\n'
-            'Subtitles to translate:\n%s'
-            ) % (source_language, name_instruction, description or '(none)',
-                 _numbered(surrounding, include_translation=True), _numbered(targets))
-        else:
-            prompt = (
+        prompt = (
                 'Translate the following audiovisual subtitles from %s into natural %s.\n\n'
                 'Read all cues as one continuous scene. Use adjacent cues only to understand '
                 'pronouns, fragments, tone, jokes and terminology.\n\n'
@@ -298,8 +268,9 @@ class OpenAICompatibleTranslatorService:
                 '7. Preserve interruptions, hesitation and unfinished sentences.\n'
                 '8. Keep both speakers when two share a cue; prefix each utterance with an ASCII hyphen.\n'
                 '9. Preserve wordplay, catchphrases and cultural references in the target language.\n'
-                '10. Keep punctuation appropriate for the target language. Use one literal <br> '
-                'only when a natural display-line break is necessary.\n'
+                '10. Keep punctuation appropriate for the target language. Prefer display lines '
+                'of at most 48 columns (wide characters count as two). Use one literal <br> '
+                'only at a natural clause or word boundary when a break is necessary.\n'
                 '11. Return every requested [number] exactly once on one physical line; '
                 '<br> is the only allowed line-break marker.\n'
                 '12. Output numbered translations only, without Markdown, explanations or source text.\n\n'
@@ -328,13 +299,10 @@ class OpenAICompatibleTranslatorService:
         invalid_ids = set()
         for target in targets:
             index = target['index']
-            if chinese:
-                result[index] = normalize_chinese_translation(result[index])
-            else:
-                result[index] = re.sub(r'\s*<br\s*/?>\s*', r'\\N', result[index], flags=re.I)
+            result[index] = normalize_translation(result[index])
             if (_is_dual_speaker(target['content']) and
                     (_speaker_marker_count(result[index]) < 2 or
-                     (r'\N' in result[index] if not chinese else '<br' in result[index].lower()))):
+                     '<br' in result[index].lower())):
                 invalid_ids.add(index)
         if invalid_ids:
             partial_result = {index: text for index, text in result.items() if index not in invalid_ids}
@@ -394,16 +362,13 @@ class OpenAICompatibleTranslatorService:
                                            progress_message=self.source_srt_file)
         bilingual = bool(settings.translator.openai_bilingual)
         for index, cue in enumerate(subtitles):
-            if self.to_lang == 'zho':
-                chinese = normalize_chinese_translation(translated[index])
-                if not _is_dual_speaker(originals[index]):
-                    chinese = wrap_translation(chinese)
-            else:
-                chinese = translated[index]
-            cue.text = originals[index] + r'\N' + chinese if bilingual else chinese
+            target_text = normalize_translation(translated[index])
+            if not _is_dual_speaker(originals[index]):
+                target_text = wrap_translation(target_text)
+            cue.text = originals[index] + r'\N' + target_text if bilingual else target_text
         styled_ass = bool(settings.translator.openai_styled_ass)
         if styled_ass:
-            apply_ass_style(subtitles, bilingual=bilingual, chinese=self.to_lang == 'zho')
+            apply_ass_style(subtitles, bilingual=bilingual)
             if settings.translator.translator_info:
                 first_start = subtitles[0].start
                 info_end = min(first_start, 5000)

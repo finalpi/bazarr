@@ -143,7 +143,7 @@ const LLMSubtitleAppearance: FunctionComponent = () => {
           </div>
         </div>
 
-        <Title order={4}>Chinese subtitle</Title>
+        <Title order={4}>Translated subtitle</Title>
         <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
           <Text
             label="Font family"
