@@ -86,6 +86,8 @@ class Subtitles(Resource):
     patch_request_parser.add_argument('path', type=str, required=False, help='External subtitles file path')
     patch_request_parser.add_argument('embeddedTrackId', type=int, required=False,
                                       help='Embedded subtitle stream index used for translation')
+    patch_request_parser.add_argument('removeHearingImpaired', type=str, required=False,
+                                      help='Remove hearing-impaired cues before manual translation')
     patch_request_parser.add_argument('type', type=str, required=True, help='Media type from ["episode", "movie"]')
     patch_request_parser.add_argument('id', type=int, required=True, help='Media ID (episodeId, radarrId)')
     patch_request_parser.add_argument('forced', type=str, required=False,
@@ -119,6 +121,7 @@ class Subtitles(Resource):
         language = args.get('language')
         subtitles_path = args.get('path')
         embedded_track_id = args.get('embeddedTrackId')
+        remove_hearing_impaired = str(args.get('removeHearingImpaired') or '').lower() == 'true'
         media_type = args.get('type')
         id = args.get('id')
         forced = True if args.get('forced') == 'True' else False
@@ -215,6 +218,7 @@ class Subtitles(Resource):
                                              sonarr_episode_id=id,
                                              radarr_id=id,
                                              metadata=metadata,
+                                             remove_hearing_impaired=remove_hearing_impaired,
                                              low_priority=settings.translator.translator_type == 'openai_compatible')
 
                 except OSError:

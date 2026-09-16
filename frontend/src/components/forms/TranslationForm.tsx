@@ -1,5 +1,5 @@
 import { FunctionComponent, useMemo } from "react";
-import { Alert, Button, Divider, LoadingOverlay, Stack } from "@mantine/core";
+import { Alert, Button, Checkbox, Divider, LoadingOverlay, Stack } from "@mantine/core";
 import { useForm } from "@mantine/form";
 import { showNotification } from "@mantine/notifications";
 import { isObject } from "lodash";
@@ -143,6 +143,7 @@ const TranslationForm: FunctionComponent<Props> = ({
   const form = useForm({
     initialValues: {
       language: null as Language.Info | null,
+      removeHearingImpaired: false,
     },
     validate: {
       language: FormUtils.validation(isObject, "Please select a language"),
@@ -231,14 +232,14 @@ const TranslationForm: FunctionComponent<Props> = ({
 
   return (
     <form
-      onSubmit={form.onSubmit(async ({ language }) => {
+      onSubmit={form.onSubmit(async ({ language, removeHearingImpaired }) => {
         if (language) {
           try {
             await Promise.all(
               selections.map((s) =>
                 mutateAsync({
                   action: "translate",
-                  form: { ...s, language: language.code2 },
+                  form: { ...s, language: language.code2, removeHearingImpaired },
                 }),
               ),
             );
@@ -285,6 +286,10 @@ const TranslationForm: FunctionComponent<Props> = ({
           {...options}
           {...form.getInputProps("language")}
         ></Selector>
+        <Checkbox
+          label="Remove hearing-impaired cues"
+          {...form.getInputProps("removeHearingImpaired", { type: "checkbox" })}
+        />
         <Divider></Divider>
         <Button type="submit" loading={isPending}>
           Start

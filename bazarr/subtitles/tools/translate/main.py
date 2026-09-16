@@ -11,6 +11,7 @@ from .core.translator_utils import validate_translation_params, convert_language
 from .services.translator_factory import TranslatorFactory
 from .traditional import convert_simplified_file
 from .openai_profiles import get_active_openai_profile
+from .hi_filter import translation_source
 from subtitles.translation_priority import mark_as_llm_subtitle
 from languages.get_languages import alpha3_from_alpha2
 from app.config import settings
@@ -58,7 +59,7 @@ def _send_llm_translation_notification(success, translator_type, to_lang, media_
 
 def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, forced, hi,
                              media_type, sonarr_series_id, sonarr_episode_id, radarr_id, metadata, job_id=None,
-                             low_priority=False):
+                             low_priority=False, remove_hearing_impaired=False):
     if not job_id:
         jobs_queue.add_job_from_function(f'Translating from {from_lang.upper()} to {to_lang.upper()} using '
                                          f'{settings.translator.translator_type.replace("_", " ").title()}',
@@ -71,6 +72,7 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
         logging.debug(f'Translation request: video={video_path}, source={source_srt_file}, from={from_lang}, to={to_lang}')
 
         validate_translation_params(video_path, source_srt_file, from_lang, to_lang)
+        hi = hi and not remove_hearing_impaired
         lang_obj, orig_to_lang = convert_language_codes(to_lang, forced, hi)
 
         logging.debug(f'BAZARR is translating in {lang_obj} this subtitles {source_srt_file}')
@@ -101,25 +103,27 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
 
         logging.debug(f'Using translator type: {translator_type}')
 
-        translator = TranslatorFactory.create_translator(
-            translator_type,
-            source_srt_file=source_srt_file,
-            dest_srt_file=dest_srt_file,
-            lang_obj=lang_obj,
-            from_lang=from_lang,
-            to_lang=alpha3_from_alpha2(to_lang),
-            media_type=media_type,
-            video_path=video_path,
-            orig_to_lang=orig_to_lang,
-            forced=forced,
-            hi=hi,
-            sonarr_series_id=sonarr_series_id,
-            sonarr_episode_id=sonarr_episode_id,
-            radarr_id=radarr_id
-        )
+        source_language = convert_language_codes(from_lang)[0] if remove_hearing_impaired else None
+        with translation_source(source_srt_file, source_language, remove_hearing_impaired) as translated_source:
+            translator = TranslatorFactory.create_translator(
+                translator_type,
+                source_srt_file=translated_source,
+                dest_srt_file=dest_srt_file,
+                lang_obj=lang_obj,
+                from_lang=from_lang,
+                to_lang=alpha3_from_alpha2(to_lang),
+                media_type=media_type,
+                video_path=video_path,
+                orig_to_lang=orig_to_lang,
+                forced=forced,
+                hi=hi,
+                sonarr_series_id=sonarr_series_id,
+                sonarr_episode_id=sonarr_episode_id,
+                radarr_id=radarr_id
+            )
 
-        logging.debug(f'Created translator instance: {translator.__class__.__name__}')
-        result = translator.translate(job_id=job_id)
+            logging.debug(f'Created translator instance: {translator.__class__.__name__}')
+            result = translator.translate(job_id=job_id)
         if result is False:
             raise RuntimeError(f'{translator.__class__.__name__} returned a failed translation result')
         logging.debug(f'BAZARR saved translated subtitles to {dest_srt_file}')

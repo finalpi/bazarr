@@ -42,6 +42,7 @@ declare namespace FormType {
     language: string;
     path: string;
     embeddedTrackId?: number;
+    removeHearingImpaired?: boolean;
     forced?: PythonBoolean;
     hi?: PythonBoolean;
     original_format?: PythonBoolean;
