@@ -23,6 +23,7 @@ from ..core.translator_utils import add_translator_info, create_process_result, 
 
 
 logger = logging.getLogger(__name__)
+OMIT_HI_CUE = '__OMIT_HI_CUE__'
 
 class TranslationConstraintError(ValueError):
     def __init__(self, message, partial_result, invalid_ids):
@@ -240,6 +241,7 @@ class OpenAICompatibleTranslatorService:
         self.video_path = video_path
         self.from_lang = from_lang
         self.orig_to_lang = orig_to_lang
+        self.remove_hearing_impaired = bool(kwargs.get('remove_hearing_impaired', False))
 
     @staticmethod
     def _endpoint(base_url):
@@ -275,6 +277,13 @@ class OpenAICompatibleTranslatorService:
                 'lines of at most 48 columns (wide characters count as two). Use one literal '
                 '<br> only at a natural clause or word boundary when a break is necessary.'
             )
+        hi_instruction = (
+            '13. Remove hearing-impaired descriptions (sound effects, music/lyrics, laughter, '
+            'speaker or action labels) from the translation, including when they are mixed '
+            'with dialogue. Translate all remaining spoken dialogue without losing its '
+            'meaning. If a requested cue contains no spoken dialogue, return exactly '
+            '__OMIT_HI_CUE__ after its [number]; never omit or renumber an index.\n'
+        ) if self.remove_hearing_impaired else ''
         target_ids = [item['index'] for item in targets]
         target_set = set(target_ids)
         surrounding = [item for item in context if item['index'] not in target_set]
@@ -296,10 +305,12 @@ class OpenAICompatibleTranslatorService:
                 '11. Return every requested [number] exactly once on one physical line; '
                 '<br> is the only allowed line-break marker.\n'
                 '12. Output numbered translations only, without Markdown, explanations or source text.\n\n'
+                '%s\n'
                 'Media context:\n%s\n\n'
                 'Surrounding context (understand only; do not output these numbers):\n%s\n\n'
                 'Subtitles to translate:\n%s'
             ) % (source_language, target_language, name_instruction, punctuation_instruction,
+                 hi_instruction,
                  description or '(none)', _numbered(surrounding, include_translation=True),
                  _numbered(targets))
         payload = {
@@ -321,6 +332,8 @@ class OpenAICompatibleTranslatorService:
         invalid_ids = set()
         for target in targets:
             index = target['index']
+            if self.remove_hearing_impaired and result[index] == OMIT_HI_CUE:
+                continue
             result[index] = normalize_translation(result[index], self.to_lang)
             if (_is_dual_speaker(target['content']) and
                     (_speaker_marker_count(result[index]) < 2 or
@@ -383,11 +396,18 @@ class OpenAICompatibleTranslatorService:
             jobs_queue.update_job_progress(job_id=job_id, progress_value=end,
                                            progress_message=self.source_srt_file)
         bilingual = bool(settings.translator.openai_bilingual)
+        kept_events = []
         for index, cue in enumerate(subtitles):
+            if self.remove_hearing_impaired and translated[index] == OMIT_HI_CUE:
+                continue
             target_text = normalize_translation(translated[index], self.to_lang)
             if not _is_dual_speaker(originals[index]):
                 target_text = wrap_translation(target_text)
             cue.text = originals[index] + r'\N' + target_text if bilingual else target_text
+            kept_events.append(cue)
+        subtitles.events = kept_events
+        if not subtitles:
+            raise ValueError('No dialogue remains after hearing-impaired cue removal')
         styled_ass = bool(settings.translator.openai_styled_ass)
         if styled_ass:
             apply_ass_style(subtitles, bilingual=bilingual)

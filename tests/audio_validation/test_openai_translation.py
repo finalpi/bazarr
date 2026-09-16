@@ -34,6 +34,7 @@ def load_translation_namespace(settings):
         'get_description': lambda *args: 'Criminal Minds season 1',
         'add_translator_info': lambda *args: None,
         'create_process_result': lambda *args: object(),
+        'OMIT_HI_CUE': '__OMIT_HI_CUE__',
         'language_from_alpha2': str, 'language_from_alpha3': str,
         'history_log': lambda **kwargs: None, 'history_log_movie': lambda **kwargs: None,
         'get_active_openai_profile': lambda: {
@@ -257,6 +258,46 @@ def test_request_bounds_model_output_and_validates_indices():
     assert 'Never add unstated specifications' in captured['json']['messages'][0]['content']
     assert 'For Chinese subtitles, replace commas and periods' in captured['json']['messages'][0]['content']
     assert captured['timeout'] == 300
+
+
+def test_hearing_impaired_prompt_omits_only_non_dialogue_cues(tmp_path):
+    namespace = load_translation_namespace(translator_settings())
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {'choices': [{'message': {'content':
+                    '[0] __OMIT_HI_CUE__\n[1] 快走'}}]}
+
+    def post(*args, **kwargs):
+        captured.update(kwargs)
+        return Response()
+
+    namespace['requests'] = SimpleNamespace(post=post, RequestException=Exception)
+    source, destination = tmp_path / 'source.srt', tmp_path / 'translated.srt'
+    subtitles = pysubs2.SSAFile()
+    subtitles.append(pysubs2.SSAEvent(start=1000, end=2000, text='[DOOR SLAMS]'))
+    subtitles.append(pysubs2.SSAEvent(start=3000, end=4000, text='[LAUGHS] Run!'))
+    subtitles.save(source, format_='srt', encoding='utf-8')
+    service = make_service(namespace, source, destination)
+    targets = [{'index': 0, 'content': '[DOOR SLAMS]'},
+               {'index': 1, 'content': '[LAUGHS] Run!'}]
+
+    service._request(targets, targets, '')
+    assert 'Translate all remaining spoken dialogue' not in captured['json']['messages'][0]['content']
+    service.remove_hearing_impaired = True
+    assert service._request(targets, targets, '') == {0: '__OMIT_HI_CUE__', 1: '快走'}
+    prompt = captured['json']['messages'][0]['content']
+    assert 'Translate all remaining spoken dialogue' in prompt
+    assert 'never omit or renumber an index' in prompt
+    service._translate_batch = lambda *args: {0: '__OMIT_HI_CUE__', 1: '快走'}
+    assert service.translate(job_id=1) == str(destination)
+    result = pysubs2.load(destination, encoding='utf-8')
+    assert [(cue.start, cue.end) for cue in result] == [(3000, 4000)]
+    assert '快走' in result[0].text
 
 
 def test_request_normalizes_and_requires_dual_speaker_markers():

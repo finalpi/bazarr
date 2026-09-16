@@ -119,7 +119,9 @@ def translate_subtitles_file(video_path, source_srt_file, from_lang, to_lang, fo
                 hi=hi,
                 sonarr_series_id=sonarr_series_id,
                 sonarr_episode_id=sonarr_episode_id,
-                radarr_id=radarr_id
+                radarr_id=radarr_id,
+                **({'remove_hearing_impaired': remove_hearing_impaired}
+                   if translator_type == 'openai_compatible' else {})
             )
 
             logging.debug(f'Created translator instance: {translator.__class__.__name__}')
