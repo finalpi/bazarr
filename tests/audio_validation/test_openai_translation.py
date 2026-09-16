@@ -116,13 +116,16 @@ def test_wraps_text_by_display_width_and_parses_numbered_output():
         20: '二十', 21: '二十一'}
 
 
-def test_preserves_target_punctuation_and_normalizes_dual_speakers():
+def test_preserves_other_punctuation_and_cleans_chinese_endings():
     namespace = load_translation_namespace(translator_settings())
     normalize = namespace['normalize_translation']
     assert normalize('你好，朋友。你还好吗？') == '你好，朋友。你还好吗？'
-    assert normalize('价格是3.5元，编号F.B.I.。') == '价格是3.5元，编号F.B.I.。'
-    assert normalize('— 你好吗？ — 我很好。') == '-你好吗？ -我很好。'
-    assert normalize('我…我的意思是...') == '我…我的意思是...'
+    assert normalize('你好，朋友。你还好吗？', 'zho') == '你好 朋友 你还好吗'
+    assert normalize('价格是3.5元，编号F.B.I.。', 'zht') == '价格是3.5元 编号F.B.I.'
+    assert normalize('— 你好吗？ — 我很好！', 'zho') == '-你好吗 -我很好'
+    assert normalize('我…我的意思是...', 'zho') == '我…我的意思是…'
+    assert normalize('你还好吗？我很好！', 'zho') == '你还好吗？我很好'
+    assert normalize('什么？！<br>我不知道？', 'zht') == '什么<br>我不知道'
     assert namespace['_is_dual_speaker']('-How are you? -I am fine.')
     assert namespace['_speaker_marker_count']('-你好吗？ -我很好') == 2
 
@@ -252,6 +255,7 @@ def test_request_bounds_model_output_and_validates_indices():
     assert captured['json']['temperature'] == 0
     assert captured['json']['messages'][0]['role'] == 'user'
     assert 'Never add unstated specifications' in captured['json']['messages'][0]['content']
+    assert 'For Chinese subtitles, replace commas and periods' in captured['json']['messages'][0]['content']
     assert captured['timeout'] == 300
 
 
@@ -274,7 +278,7 @@ def test_request_normalizes_and_requires_dual_speaker_markers():
     service = make_service(namespace, 'source.srt', 'translated.srt')
     target = [{'index': 0, 'content': '-How are you? -I am fine.'}]
 
-    assert service._request(target, target, '') == {0: '-你好吗， -我很好。'}
+    assert service._request(target, target, '') == {0: '-你好吗 -我很好'}
 
     content['value'] = '[0] 你好吗 我很好'
     with pytest.raises(ValueError, match='violated dual-speaker constraints'):
@@ -314,6 +318,10 @@ def test_request_prompts_name_policy_by_source_language_without_enforcement():
     assert service._request(target, target, '') == {0: '玛姬 过来一下'}
     assert 'established target-language' in captured['json']['messages'][0]['content']
 
+    service.to_lang = 'zht'
+    assert service._request(target, target, '') == {0: '玛姬 过来一下'}
+    assert 'For Chinese subtitles, replace commas and periods' in captured['json']['messages'][0]['content']
+
 
 def test_non_chinese_request_uses_target_language_and_preserves_punctuation():
     namespace = load_translation_namespace(translator_settings())
@@ -338,6 +346,7 @@ def test_non_chinese_request_uses_target_language_and_preserves_punctuation():
     prompt = captured['json']['messages'][0]['content']
     assert 'from en into natural spa' in prompt
     assert 'Do not use commas or periods in Chinese' not in prompt
+    assert 'Keep punctuation appropriate for the target language' in prompt
 
 
 def test_non_chinese_styled_ass_uses_target_style(tmp_path):

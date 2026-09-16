@@ -35,11 +35,20 @@ def _plain(text):
     return re.sub(r'\s+', ' ', text.replace(r'\N', ' ').replace('\n', ' ')).strip()
 
 
-def normalize_translation(text):
-    """Normalize speaker markers and spacing while retaining the target punctuation."""
+def normalize_translation(text, to_lang=None):
+    """Normalize speaker markers and apply the requested target punctuation policy."""
     text = re.sub(r'(^|\s)[—–-]\s*(?=\S)', r'\1-', text)
     text = re.sub(r'\s*<br\s*/?>\s*', '<br>', text, flags=re.I)
+    if to_lang in {'zho', 'zht'}:
+        text = re.sub(r'\.{3,}', '…', text)
+        text = re.sub(r'[，。]', ' ', text)
+        text = re.sub(r'(?<!\d),(?!\d)', ' ', text)
+        text = re.sub(r'(?<![A-Za-z0-9])\.(?![A-Za-z0-9])', ' ', text)
+        text = re.sub(r'[？！!?]+(?=\s+-|<br>|$)', '', text)
     text = re.sub(r'[ \t]+', ' ', text).strip()
+    if to_lang in {'zho', 'zht'}:
+        text = re.sub(r'\s+([？！!?：:；;、”’》）】])', r'\1', text)
+        text = re.sub(r'([“‘《（【])\s+', r'\1', text)
     return text
 
 
@@ -251,6 +260,21 @@ class OpenAICompatibleTranslatorService:
                 '3. Keep names and speaker labels consistent; use established target-language '
                 'forms or recognizable source spelling.'
             )
+        if self.to_lang in {'zho', 'zht'}:
+            punctuation_instruction = (
+                '10. For Chinese subtitles, replace commas and periods with one space '
+                '(but preserve decimal points and abbreviations); omit question marks and '
+                'exclamation marks at the end of each utterance. Keep meaningful internal '
+                'punctuation, quotes and ellipses. Prefer display lines of at most 48 columns '
+                '(wide characters count as two). Use one literal <br> only at a natural '
+                'clause or word boundary when a break is necessary.'
+            )
+        else:
+            punctuation_instruction = (
+                '10. Keep punctuation appropriate for the target language. Prefer display '
+                'lines of at most 48 columns (wide characters count as two). Use one literal '
+                '<br> only at a natural clause or word boundary when a break is necessary.'
+            )
         target_ids = [item['index'] for item in targets]
         target_set = set(target_ids)
         surrounding = [item for item in context if item['index'] not in target_set]
@@ -268,16 +292,14 @@ class OpenAICompatibleTranslatorService:
                 '7. Preserve interruptions, hesitation and unfinished sentences.\n'
                 '8. Keep both speakers when two share a cue; prefix each utterance with an ASCII hyphen.\n'
                 '9. Preserve wordplay, catchphrases and cultural references in the target language.\n'
-                '10. Keep punctuation appropriate for the target language. Prefer display lines '
-                'of at most 48 columns (wide characters count as two). Use one literal <br> '
-                'only at a natural clause or word boundary when a break is necessary.\n'
+                '%s\n'
                 '11. Return every requested [number] exactly once on one physical line; '
                 '<br> is the only allowed line-break marker.\n'
                 '12. Output numbered translations only, without Markdown, explanations or source text.\n\n'
                 'Media context:\n%s\n\n'
                 'Surrounding context (understand only; do not output these numbers):\n%s\n\n'
                 'Subtitles to translate:\n%s'
-            ) % (source_language, target_language, name_instruction,
+            ) % (source_language, target_language, name_instruction, punctuation_instruction,
                  description or '(none)', _numbered(surrounding, include_translation=True),
                  _numbered(targets))
         payload = {
@@ -299,7 +321,7 @@ class OpenAICompatibleTranslatorService:
         invalid_ids = set()
         for target in targets:
             index = target['index']
-            result[index] = normalize_translation(result[index])
+            result[index] = normalize_translation(result[index], self.to_lang)
             if (_is_dual_speaker(target['content']) and
                     (_speaker_marker_count(result[index]) < 2 or
                      '<br' in result[index].lower())):
@@ -362,7 +384,7 @@ class OpenAICompatibleTranslatorService:
                                            progress_message=self.source_srt_file)
         bilingual = bool(settings.translator.openai_bilingual)
         for index, cue in enumerate(subtitles):
-            target_text = normalize_translation(translated[index])
+            target_text = normalize_translation(translated[index], self.to_lang)
             if not _is_dual_speaker(originals[index]):
                 target_text = wrap_translation(target_text)
             cue.text = originals[index] + r'\N' + target_text if bilingual else target_text

@@ -28,7 +28,9 @@ The request also applies a batch-sized output-token limit so verbose local model
 cannot generate indefinitely and block all later translation batches.
 
 The translator preserves cue timestamps and uses the same display-width line
-wrapping for every target language, retaining target-language punctuation.
+wrapping for every target language. Simplified and Traditional Chinese replace
+commas and periods with spaces and omit utterance-ending question marks and
+exclamation marks; other target languages retain their punctuation.
 Styled bilingual ASS output creates separate `Target` and `Original` styles and
 two same-time events for each cue. The default presentation uses larger bold
 pale-yellow translated text above smaller regular white original text,
