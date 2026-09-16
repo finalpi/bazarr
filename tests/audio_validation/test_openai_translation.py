@@ -304,6 +304,48 @@ def test_request_prompts_name_policy_by_source_language_without_enforcement():
     assert 'established Simplified Chinese translations' in captured['json']['messages'][0]['content']
 
 
+def test_non_chinese_request_uses_target_language_and_preserves_punctuation():
+    namespace = load_translation_namespace(translator_settings())
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {'choices': [{'message': {'content': '[0] Hola, amigo.<br>¿Cómo estás?'}}]}
+
+    def post(*args, **kwargs):
+        captured.update(kwargs)
+        return Response()
+
+    namespace['requests'] = SimpleNamespace(post=post, RequestException=Exception)
+    service = make_service(namespace, 'source.srt', 'translated.srt')
+    service.to_lang = 'spa'
+    targets = [{'index': 0, 'content': 'Hello, friend. How are you?'}]
+    assert service._request(targets, targets, '') == {0: r'Hola, amigo.\N¿Cómo estás?'}
+    prompt = captured['json']['messages'][0]['content']
+    assert 'from en into natural spa' in prompt
+    assert 'Do not use commas or periods in Chinese' not in prompt
+
+
+def test_non_chinese_styled_ass_uses_target_style(tmp_path):
+    namespace = load_translation_namespace(translator_settings(openai_styled_ass=True))
+    source, destination = tmp_path / 'source.srt', tmp_path / 'translated.ass'
+    subtitles = pysubs2.SSAFile()
+    subtitles.append(pysubs2.SSAEvent(start=1000, end=2500, text='Hello'))
+    subtitles.save(source, format_='srt', encoding='utf-8')
+    service = make_service(namespace, source, destination)
+    service.to_lang = 'spa'
+    service.orig_to_lang = 'es'
+    service._translate_batch = lambda targets, context, description: {0: 'Hola, amigo.'}
+    assert service.translate(job_id=1) == str(destination)
+    result = pysubs2.load(destination, encoding='utf-8')
+    assert [(cue.style, cue.text) for cue in result] == [
+        ('Original', 'Hello'), ('Target', 'Hola, amigo.')]
+    assert result.styles['Target'].fontname == 'Arial'
+
+
 def test_constraint_retry_only_resubmits_invalid_lines():
     namespace = load_translation_namespace(translator_settings())
     service = make_service(namespace, 'source.srt', 'translated.srt')
@@ -405,7 +447,7 @@ def test_embedded_chinese_blocks_llm_but_embedded_english_is_preferred(tmp_path,
         'app.get_args': SimpleNamespace(args=SimpleNamespace(config_dir=str(tmp_path))),
         'utilities.binaries': SimpleNamespace(get_binary=str),
         'subtitles.embedded_translation': SimpleNamespace(
-            extract_embedded_subtitle=lambda *args: str(extracted)),
+            extract_embedded_subtitle=lambda *args, **kwargs: str(extracted)),
         'subzero.language': SimpleNamespace(Language=lambda code: code),
         'subliminal_patch.core': SimpleNamespace(get_subtitle_path=lambda *args, **kwargs: str(destination)),
         'utilities.helper': SimpleNamespace(get_target_folder=lambda path: None),

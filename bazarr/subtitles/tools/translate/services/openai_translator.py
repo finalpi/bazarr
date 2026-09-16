@@ -139,34 +139,37 @@ def _ass_style(prefix, default_font, default_color, margin):
     )
 
 
-def apply_ass_style(subtitles, bilingual=False):
+def apply_ass_style(subtitles, bilingual=False, chinese=True):
     subtitles.info['PlayResX'] = '1920'
     subtitles.info['PlayResY'] = '1080'
     subtitles.info['ScaledBorderAndShadow'] = 'yes'
     subtitles.info['Collisions'] = 'Reverse'
     margin = int(settings.translator.openai_ass_bilingual_margin_v)
-    subtitles.styles['Chinese'] = _ass_style(
-        'openai_ass_chinese', 'Noto Sans CJK SC', '#FFFF80', margin)
+    target_style = 'Chinese' if chinese else 'Target'
+    subtitles.styles[target_style] = _ass_style(
+        'openai_ass_chinese' if chinese else 'openai_ass_original',
+        'Noto Sans CJK SC' if chinese else 'Arial',
+        '#FFFF80' if chinese else '#FFFFFF', margin)
     subtitles.styles['Original'] = _ass_style(
         'openai_ass_original', 'Arial', '#FFFFFF', margin)
 
     if not bilingual:
         for cue in subtitles:
-            cue.style = 'Chinese'
+            cue.style = target_style
         return subtitles
 
     events = []
     for cue in subtitles:
-        original, separator, chinese = cue.text.partition(r'\N')
+        original, separator, target_text = cue.text.partition(r'\N')
         if not separator:
-            cue.style = 'Chinese'
+            cue.style = target_style
             events.append(cue)
             continue
         original_cue = cue.copy()
         original_cue.text = original
         original_cue.style = 'Original'
-        cue.text = chinese
-        cue.style = 'Chinese'
+        cue.text = target_text
+        cue.style = target_style
         events.extend((original_cue, cue))
     subtitles.events = events
     return subtitles
@@ -234,22 +237,31 @@ class OpenAICompatibleTranslatorService:
 
     def _request(self, targets, context, description):
         profile = get_active_openai_profile()
-        preserve_english_names = str(self.from_lang).lower() in {'en', 'eng'}
+        chinese = self.to_lang == 'zho'
+        source_language = language_from_alpha2(self.from_lang) or self.from_lang
+        target_language = language_from_alpha3(self.to_lang) or self.to_lang
+        preserve_english_names = chinese and str(self.from_lang).lower() in {'en', 'eng'}
         if preserve_english_names:
             name_instruction = (
                 '3. Keep personal names, character names, nicknames and speaker labels in their original '
                 'Latin spelling. Never translate or transliterate them into Chinese.'
             )
-        else:
+        elif chinese:
             name_instruction = (
                 '3. Use established Simplified Chinese translations or transliterations for personal names '
                 'and keep them consistent.'
             )
+        else:
+            name_instruction = (
+                '3. Use established names and transliterations in the target language; '
+                'keep character names and speaker labels consistent.'
+            )
         target_ids = [item['index'] for item in targets]
         target_set = set(target_ids)
         surrounding = [item for item in context if item['index'] not in target_set]
-        prompt = (
-            'Translate the following English audiovisual subtitles into polished Simplified Chinese.\n\n'
+        if chinese:
+            prompt = (
+            'Translate the following %s audiovisual subtitles into polished Simplified Chinese.\n\n'
             'Read all cues as one continuous scene and use adjacent cues only to understand pronouns, '
             'fragments, tone, jokes, terminology and implied intent.\n\n'
             'Requirements:\n'
@@ -269,8 +281,34 @@ class OpenAICompatibleTranslatorService:
             'Media context:\n%s\n\n'
             'Surrounding context (understand only; do not output these numbers):\n%s\n\n'
             'Subtitles to translate:\n%s'
-        ) % (name_instruction, description or '(none)',
-             _numbered(surrounding, include_translation=True), _numbered(targets))
+            ) % (source_language, name_instruction, description or '(none)',
+                 _numbered(surrounding, include_translation=True), _numbered(targets))
+        else:
+            prompt = (
+                'Translate the following audiovisual subtitles from %s into natural %s.\n\n'
+                'Read all cues as one continuous scene. Use adjacent cues only to understand '
+                'pronouns, fragments, tone, jokes and terminology.\n\n'
+                'Requirements:\n'
+                '1. Write concise, idiomatic dialogue suitable for streaming subtitles.\n'
+                '2. Preserve meaning, emotional intensity, speaker changes and technical terms.\n'
+                '%s\n'
+                '4. Correct malformed wording only when adjacent dialogue strongly supports it; otherwise preserve ambiguity.\n'
+                '5. Never add unstated specifications, directions, relationships, actions or plot facts.\n'
+                '6. Never move information between cues or complete a sentence early.\n'
+                '7. Preserve interruptions, hesitation and unfinished sentences.\n'
+                '8. Keep both speakers when two share a cue; prefix each utterance with an ASCII hyphen.\n'
+                '9. Preserve wordplay, catchphrases and cultural references in the target language.\n'
+                '10. Keep punctuation appropriate for the target language. Use one literal <br> '
+                'only when a natural display-line break is necessary.\n'
+                '11. Return every requested [number] exactly once on one physical line; '
+                '<br> is the only allowed line-break marker.\n'
+                '12. Output numbered translations only, without Markdown, explanations or source text.\n\n'
+                'Media context:\n%s\n\n'
+                'Surrounding context (understand only; do not output these numbers):\n%s\n\n'
+                'Subtitles to translate:\n%s'
+            ) % (source_language, target_language, name_instruction,
+                 description or '(none)', _numbered(surrounding, include_translation=True),
+                 _numbered(targets))
         payload = {
             'model': profile['model'],
             'temperature': 0,
@@ -290,9 +328,13 @@ class OpenAICompatibleTranslatorService:
         invalid_ids = set()
         for target in targets:
             index = target['index']
-            result[index] = normalize_chinese_translation(result[index])
+            if chinese:
+                result[index] = normalize_chinese_translation(result[index])
+            else:
+                result[index] = re.sub(r'\s*<br\s*/?>\s*', r'\\N', result[index], flags=re.I)
             if (_is_dual_speaker(target['content']) and
-                    (_speaker_marker_count(result[index]) < 2 or '<br' in result[index].lower())):
+                    (_speaker_marker_count(result[index]) < 2 or
+                     (r'\N' in result[index] if not chinese else '<br' in result[index].lower()))):
                 invalid_ids.add(index)
         if invalid_ids:
             partial_result = {index: text for index, text in result.items() if index not in invalid_ids}
@@ -361,7 +403,7 @@ class OpenAICompatibleTranslatorService:
             cue.text = originals[index] + r'\N' + chinese if bilingual else chinese
         styled_ass = bool(settings.translator.openai_styled_ass)
         if styled_ass:
-            apply_ass_style(subtitles, bilingual=bilingual)
+            apply_ass_style(subtitles, bilingual=bilingual, chinese=self.to_lang == 'zho')
             if settings.translator.translator_info:
                 first_start = subtitles[0].start
                 info_end = min(first_start, 5000)

@@ -31,13 +31,21 @@ Bazarr does not scan your disk to detect series and movies. It only manages the 
 
 ## Enhanced subtitle workflow in this fork
 
+This is a fork of [upstream Bazarr](https://github.com/morpheus65535/bazarr).
+It retains upstream Sonarr/Radarr integration, language profiles, subtitle management,
+and the standard provider and translation interfaces. The changes in this fork are
+focused on speech-timing validation, embedded-track and manual translation,
+Chinese subtitle discovery, season uploads, Jellyfin refresh, and a published
+multi-platform Docker image. The list below describes the added or modified behavior;
+it is not a list of upstream Bazarr features.
+
 The `master` branch and its Docker image extend Bazarr with a subtitle workflow designed for mixed-language TV and anime libraries:
 
 - Validate downloaded subtitles against speech timing before saving them. A failed subtitle is aligned first and then validated again; it is rejected when the aligned result still does not match.
 - Prefer a matching embedded subtitle track as the synchronization reference, with audio timing available as the fallback.
 - Extract embedded text subtitle tracks for translation. The work's original-language track is preferred, followed by English.
 - Download the original-language subtitle when no usable embedded or external source exists. Sonarr/Radarr `originalLanguage` metadata is used, so Japanese works request and retain `ja` subtitles.
-- Translate with Ollama or any OpenAI-compatible API using neighboring cues for context, balanced line breaking, bilingual output, and low-priority `.llm.<language>` filenames.
+- Translate with Ollama or any OpenAI-compatible API using neighboring cues for context, bilingual output, and low-priority `.llm.<language>` filenames. Manual translation offers the languages enabled in Bazarr's language settings; Simplified Chinese retains its tailored prompt and line wrapping, while other targets use language-specific prompts and target-language punctuation.
 - Save three additional OpenAI-compatible API profiles and switch the active endpoint, API key, and model together from **Settings > Subtitles > Translating**. The original fields remain available as the Default profile.
 - Label external subtitles without a language suffix as Unknown instead of guessing from mixed-language content. Automatic LLM translation ignores Unknown files and prefers an embedded original-language or English subtitle track. Legacy subtitle encodings such as GB18030 are detected when a marked source is translated manually.
 - Allow manual translation directly from a displayed embedded text subtitle track. Bazarr extracts the selected stream to its cache before translation; other external-subtitle tools remain disabled for embedded tracks.
@@ -49,7 +57,7 @@ The `master` branch and its Docker image extend Bazarr with a subtitle workflow 
 - Sonarr/Radarr alternative titles and absolute episode numbers are injected into provider searches without extra LLM calls. ZIP/RAR/7z packs use a shared selector that first matches season/episode (including absolute anime numbering), then language, completeness, HI/forced flags, and ASS/SRT format. A built-in local-sibling provider can reuse subtitles from another same-duration encode before making network requests; downloaded candidates still pass the existing audio validation.
 - When a batch contains an isolated dual-speaker formatting violation, retry only that cue and retain all valid translations instead of paying to translate the full batch again. Failed translation notifications retain the final cue-level validation reason for diagnosis.
 - Translate Simplified Chinese once and create Traditional Chinese locally with OpenCC, avoiding a second LLM request.
-- Save LLM subtitles as styled ASS files with separate `Chinese` and `Original` styles. The fansub-inspired defaults put larger bold yellow Chinese above smaller white original text; both styles and the bottom margin can be adjusted independently with a live preview under **Settings > Subtitles > LLM Subtitle Appearance**.
+- Save LLM subtitles as styled ASS files with separate `Chinese` and `Original` styles for Simplified Chinese, or `Target` and `Original` styles for other languages. The fansub-inspired defaults put larger bold yellow Chinese above smaller white original text; both styles and the bottom margin can be adjusted independently with a live preview under **Settings > Subtitles > LLM Subtitle Appearance**. Non-Chinese targets use the original-text appearance for the target style.
 - Send configured Apprise notifications, including Telegram, when an LLM translation completes or fails. Success messages include the target language, model, and output filename; failure messages include a short redacted reason.
 - Notify Jellyfin after subtitle downloads, uploads, deletions, synchronization, and translations. Configure the Jellyfin server, API key, libraries, and immediate or asynchronous refresh under **Settings > Jellyfin**. Immediate refresh uses `Default` media probing so newly created external subtitles are enumerated; manual season uploads serialize episode refreshes with a short interval because Jellyfin may acknowledge concurrent requests while skipping some subtitle scans.
 
