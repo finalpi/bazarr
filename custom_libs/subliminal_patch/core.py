@@ -626,6 +626,10 @@ class SZProviderPool(ProviderPool):
             # make sure to preserve original subtitles format if requested
             subtitle.use_original_format = use_original_format
 
+            rejection_check = getattr(self, 'subtitle_rejection_check', None)
+            if rejection_check is not None and rejection_check(video, subtitle):
+                logger.info('Skipping previously rejected subtitle for this media')
+                continue
             # download
             logger.debug("%r: Trying to download subtitle with matches %s, score: %s; release(s): %s", subtitle,
                          matches, score, subtitle.release_info)
@@ -635,6 +639,10 @@ class SZProviderPool(ProviderPool):
                     continue
                 subtitle.score = score
                 downloaded_subtitles.append(subtitle)
+            else:
+                rejection_record = getattr(self, 'subtitle_rejection_record', None)
+                if rejection_record is not None:
+                    rejection_record(video, subtitle)
 
             # stop if only one subtitle is requested
             if only_one and downloaded_subtitles:
@@ -652,6 +660,9 @@ class SZProviderPool(ProviderPool):
             
             for subtitle, score, score_without_hash, matches, orig_matches in scored_subtitles:
                 if subtitle.provider_name == 'whisperai':
+                    rejection_check = getattr(self, 'subtitle_rejection_check', None)
+                    if rejection_check is not None and rejection_check(video, subtitle):
+                        continue
                     logger.info('BAZARR Bulk Task: Falling back to Whisper for %r', video.name)
                     subtitle.use_original_format = use_original_format
                     if self.download_subtitle(subtitle):
@@ -660,6 +671,10 @@ class SZProviderPool(ProviderPool):
                         subtitle.score = score
                         downloaded_subtitles.append(subtitle)
                         break
+                    else:
+                        rejection_record = getattr(self, 'subtitle_rejection_record', None)
+                        if rejection_record is not None:
+                            rejection_record(video, subtitle)
 
         return downloaded_subtitles
 

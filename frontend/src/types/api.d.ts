@@ -385,6 +385,14 @@ interface SearchResultType {
   provider: string;
   release_info: string[];
   tags?: string[] | null;
+  rejected?: boolean;
+  rejection?: {
+    id: number;
+    reason: string;
+    detail?: string;
+    member?: string;
+    timestamp?: string;
+  } | null;
   score: number;
   score_without_hash: number;
   subtitle: unknown;

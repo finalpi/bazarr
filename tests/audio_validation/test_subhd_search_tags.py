@@ -167,8 +167,12 @@ def response_model(media_type):
     assignment = next(node for node in resource.body if isinstance(node, ast.Assign)
                       and isinstance(node.targets[0], ast.Name) and node.targets[0].id == 'get_response_model')
     namespace_name = 'api_ns_providers_episodes' if media_type == 'series' else 'api_ns_providers_movies'
-    return eval(compile(ast.Expression(assignment.value), str(source), 'eval'),
-                {namespace_name: Namespace('TagResponse'), 'fields': fields})
+    rejection_assignment = next(node for node in resource.body if isinstance(node, ast.Assign)
+                                and isinstance(node.targets[0], ast.Name)
+                                and node.targets[0].id == 'rejection_model')
+    namespace = {namespace_name: Namespace('TagResponse'), 'fields': fields}
+    exec(compile(ast.Module(body=[rejection_assignment], type_ignores=[]), str(source), 'exec'), namespace)
+    return eval(compile(ast.Expression(assignment.value), str(source), 'eval'), namespace)
 
 
 @pytest.mark.parametrize('media_type,id_name', [('series', 'episodeid'), ('movie', 'radarrid')])

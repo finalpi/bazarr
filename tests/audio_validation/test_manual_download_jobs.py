@@ -75,6 +75,7 @@ def manual_namespace(queue_namespace, tmp_path):
                      get_array_from=lambda value: value, force_unicode=lambda value: value,
                      get_video=Mock(return_value=video), _get_pool=lambda *args: object(),
                      download_subtitles=Mock(), validate_download=Mock(return_value=True),
+                     get_rejection=Mock(return_value=None), record_rejection=Mock(return_value=None),
                      get_target_folder=lambda _: str(tmp_path), save_subtitles=Mock(),
                      _get_scores=lambda _: (0, 100, None), process_subtitle=Mock(),
                      database=SimpleNamespace(execute=Mock(return_value=SimpleNamespace(first=lambda: metadata))),

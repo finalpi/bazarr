@@ -314,6 +314,12 @@ def validate_download(video, subtitle, progress=None):
         logging.warning('BAZARR Timing validation rejected: context=%s stage=%s reason=%s detail=%s elapsed=%.3fs',
                         json.dumps(context, ensure_ascii=False), stage, reason, detail or reason,
                         time.monotonic() - started)
+        try:
+            from .rejections import record_rejection
+            record_rejection(video, subtitle, reason, detail)
+        except Exception as error:
+            logging.warning('BAZARR Unable to persist subtitle rejection: context=%s error_type=%s',
+                            json.dumps(context, ensure_ascii=False), type(error).__name__)
         _progress(progress, 'timing_rejected', {'reason': reason})
         return False
 

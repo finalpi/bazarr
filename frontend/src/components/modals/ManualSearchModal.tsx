@@ -16,15 +16,19 @@ import {
 } from "@mantine/core";
 import {
   faCaretDown,
-  faCloudDownloadAlt,
+  faClock,
   faDownload,
   faInfoCircle,
+  faRotateLeft,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { UseQueryResult } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
 import { isString } from "lodash";
-import { useSystemProviders } from "@/apis/hooks/providers";
+import {
+  useClearProviderRejection,
+  useSystemProviders,
+} from "@/apis/hooks/providers";
 import { ManualSearchOptions } from "@/apis/raw/providers";
 import { Action } from "@/components";
 import Language from "@/components/bazarr/Language";
@@ -34,6 +38,35 @@ import { withModal } from "@/modules/modals";
 import { GetItemId } from "@/utilities";
 
 type SupportType = Item.Movie | Item.Episode;
+
+function rejectionDescription(rejection: SearchResultType["rejection"]) {
+  if (!rejection) return "This subtitle did not match the video.";
+  if (rejection.detail?.trim()) return rejection.detail.trim();
+  /* eslint-disable camelcase -- Persisted backend rejection reason codes. */
+  const reasons: Record<string, string> = {
+    obvious_fragment:
+      "The subtitle contains only a short fragment of the video.",
+    parse_loss:
+      "The subtitle parser could not read a substantial part of the file.",
+    invalid_format: "The downloaded file is not a supported text subtitle.",
+    no_dialogue: "The subtitle contains no usable dialogue cues.",
+    script_mismatch:
+      "The subtitle does not match the requested Chinese script.",
+    insufficient_speech:
+      "The original audio contains too little dialogue to confirm timing.",
+    timing_not_confirmed:
+      "The subtitle timing does not match the original audio.",
+    corrected_timing_not_confirmed:
+      "The corrected subtitle still does not match the original audio.",
+    validation_timeout:
+      "Original-audio timing validation exceeded its time limit.",
+    validation_unavailable: "Original-audio timing validation is unavailable.",
+    no_eligible_subtitle: "The package contains no matching subtitle.",
+    download_failed: "The subtitle provider could not download this subtitle.",
+  };
+  /* eslint-enable camelcase */
+  return reasons[rejection.reason] || rejection.reason.replaceAll("_", " ");
+}
 
 interface Props<T extends SupportType> {
   download: (item: T, result: SearchResultType) => Promise<void>;
@@ -59,6 +92,9 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
     id: number;
   } | null>(null);
   const providerStatus = useSystemProviders();
+  const clearRejection = useClearProviderRejection();
+  const [queuedSubtitle, setQueuedSubtitle] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
   const providerOptions = useMemo(
     () =>
       (providerStatus.data ?? []).map(({ name, status }) => ({
@@ -81,7 +117,8 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
 
   const search = useCallback(() => {
     if (results.isFetching || (!allProviders && providers.length === 0)) return;
-    setDownloaded({ id: "", state: false });
+    setQueuedSubtitle("");
+    setActionError(null);
     setSubmitted((current) => ({
       options: {
         keyword: keyword.trim() || undefined,
@@ -95,9 +132,13 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
     ({
       releaseInfo,
       tags,
+      rejected,
+      rejection,
     }: {
       releaseInfo: string[];
       tags?: string[] | null;
+      rejected?: boolean;
+      rejection?: SearchResultType["rejection"];
     }) => {
       const [open, setOpen] = useState(false);
 
@@ -149,12 +190,20 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
               ))}
             </Group>
           )}
+          {rejected && (
+            <Stack gap={2}>
+              <Badge size="xs" variant="light" color="red">
+                Not matched
+              </Badge>
+              <Text size="xs" c="red" title={rejectionDescription(rejection)}>
+                {rejectionDescription(rejection)}
+              </Text>
+            </Stack>
+          )}
         </Stack>
       );
     },
   );
-
-  const [Downloaded, setDownloaded] = useState({ id: "", state: false });
 
   const columns = useMemo<ColumnDef<SearchResultType>[]>(
     () => [
@@ -221,10 +270,17 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
         accessorKey: "release_info",
         cell: ({
           row: {
-            original: { release_info: releaseInfo, tags },
+            original: { release_info: releaseInfo, tags, rejected, rejection },
           },
         }) => {
-          return <ReleaseInfoCell releaseInfo={releaseInfo} tags={tags} />;
+          return (
+            <ReleaseInfoCell
+              releaseInfo={releaseInfo}
+              tags={tags}
+              rejected={rejected}
+              rejection={rejection}
+            />
+          );
         },
       },
       {
@@ -257,26 +313,76 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
         accessorKey: "subtitle",
         cell: ({ row }) => {
           const result = row.original;
-          const isDownloaded =
-            Downloaded.id === String(result.subtitle) && Downloaded.state;
+          const subtitleId = String(result.subtitle);
+          const isQueued = queuedSubtitle === subtitleId;
           return (
-            <Action
-              label="Download"
-              icon={isDownloaded ? faCloudDownloadAlt : faDownload}
-              color={isDownloaded ? "brand" : "gray"}
-              disabled={item === null}
-              onClick={async () => {
-                if (!item) return;
-
-                await download(item, result);
-                setDownloaded({ id: String(result.subtitle), state: true });
-              }}
-            ></Action>
+            <Group gap={4} wrap="nowrap">
+              <Action
+                label={isQueued ? "Queued" : "Download"}
+                icon={isQueued ? faClock : faDownload}
+                color="gray"
+                disabled={item === null || result.rejected === true || isQueued}
+                onClick={async () => {
+                  if (!item || result.rejected === true) return;
+                  setActionError(null);
+                  try {
+                    // HTTP 204 confirms queue submission, not a saved subtitle.
+                    await download(item, result);
+                    setQueuedSubtitle(subtitleId);
+                  } catch (error) {
+                    setActionError(
+                      error instanceof Error
+                        ? error.message
+                        : "Could not queue subtitle download.",
+                    );
+                  }
+                }}
+              />
+              {result.rejected && (
+                <Action
+                  label="Allow retry"
+                  icon={faRotateLeft}
+                  color="gray"
+                  disabled={itemId === undefined || clearRejection.isPending}
+                  isLoading={
+                    clearRejection.isPending &&
+                    clearRejection.variables?.subtitle === subtitleId
+                  }
+                  onClick={async () => {
+                    if (itemId === undefined) return;
+                    setActionError(null);
+                    try {
+                      await clearRejection.mutateAsync({
+                        mediaType: "radarrId" in item ? "movie" : "episode",
+                        id: itemId,
+                        subtitle: subtitleId,
+                      });
+                      if (queuedSubtitle === subtitleId) setQueuedSubtitle("");
+                      await results.refetch();
+                    } catch (error) {
+                      setActionError(
+                        error instanceof Error
+                          ? error.message
+                          : "Could not allow subtitle retry.",
+                      );
+                    }
+                  }}
+                />
+              )}
+            </Group>
           );
         },
       },
     ],
-    [download, item, ReleaseInfoCell, Downloaded],
+    [
+      download,
+      item,
+      itemId,
+      ReleaseInfoCell,
+      queuedSubtitle,
+      clearRejection,
+      results,
+    ],
   );
 
   const bSceneNameAvailable =
@@ -343,6 +449,11 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
       {results.isError && (
         <Alert color="red" title="Search failed">
           {results.error.message}
+        </Alert>
+      )}
+      {actionError && (
+        <Alert color="red" title="Subtitle action failed">
+          {actionError}
         </Alert>
       )}
       <Collapse expanded={haveResult && !results.isFetching}>

@@ -47,6 +47,10 @@ class ProviderApi extends BaseApi {
     await this.post("/movies", form, { radarrid });
   }
 
+  async clearMovieRejection(radarrid: number, subtitle: string) {
+    await this.delete("/movies", { radarrid, subtitle });
+  }
+
   async episodes(episodeid: number, options?: ManualSearchOptions) {
     const response = await this.get<DataWrapper<SearchResultType[]>>(
       searchPath("/episodes", "episodeid", episodeid, options),
@@ -60,6 +64,10 @@ class ProviderApi extends BaseApi {
     form: FormType.ManualDownload,
   ) {
     await this.post("/episodes", form, { seriesid, episodeid });
+  }
+
+  async clearEpisodeRejection(episodeid: number, subtitle: string) {
+    await this.delete("/episodes", { episodeid, subtitle });
   }
 }
 

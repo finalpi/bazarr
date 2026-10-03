@@ -3,10 +3,11 @@ import { ComponentProps } from "react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { useMoviesProvider } from "@/apis/hooks/providers";
+import { useEpisodesProvider, useMoviesProvider } from "@/apis/hooks/providers";
+import providerApi from "@/apis/raw/providers";
 import { customRender, screen, waitFor } from "@/tests";
 import server from "@/tests/mocks/node";
-import { MovieSearchModal } from "./ManualSearchModal";
+import { EpisodeSearchModal, MovieSearchModal } from "./ManualSearchModal";
 
 vi.mock("@/modules/socketio", () => ({ default: { initialize: vi.fn() } }));
 
@@ -30,7 +31,13 @@ const result: SearchResultType = {
   original_format: "True",
 };
 
-function renderSearch(download = vi.fn().mockResolvedValue(undefined)) {
+function renderSearch(
+  download: (
+    item: Item.Movie | Item.Episode,
+    candidate: SearchResultType,
+  ) => Promise<void> = vi.fn().mockResolvedValue(undefined),
+  mediaType: "movie" | "episode" = "movie",
+) {
   server.use(
     http.get("/api/providers", () =>
       HttpResponse.json({
@@ -42,18 +49,37 @@ function renderSearch(download = vi.fn().mockResolvedValue(undefined)) {
       }),
     ),
   );
-  const item = {
-    radarrId: 9,
-    title: "Maria Holic",
-    path: "/movies/Maria.Holic.mkv",
-  } as Item.Movie;
-  customRender(
-    <MovieSearchModal
-      id="manual-test"
-      context={{} as ComponentProps<typeof MovieSearchModal>["context"]}
-      innerProps={{ item, query: useMoviesProvider, download }}
-    />,
-  );
+  const item = (
+    mediaType === "movie"
+      ? {
+          radarrId: 9,
+          title: "Maria Holic",
+          path: "/movies/Maria.Holic.mkv",
+        }
+      : {
+          sonarrEpisodeId: 47,
+          sonarrSeriesId: 9,
+          title: "The episode",
+          path: "/tv/Maria.Holic.S02E05.mkv",
+        }
+  ) as Item.Movie | Item.Episode;
+  if ("radarrId" in item) {
+    customRender(
+      <MovieSearchModal
+        id="manual-test"
+        context={{} as ComponentProps<typeof MovieSearchModal>["context"]}
+        innerProps={{ item, query: useMoviesProvider, download }}
+      />,
+    );
+  } else {
+    customRender(
+      <EpisodeSearchModal
+        id="manual-test"
+        context={{} as ComponentProps<typeof EpisodeSearchModal>["context"]}
+        innerProps={{ item, query: useEpisodesProvider, download }}
+      />,
+    );
+  }
   return { item, download };
 }
 
@@ -210,5 +236,209 @@ describe("manual subtitle search", () => {
     await screen.findByText("Maria.Holic.CHS.ass");
     await user.click(screen.getByRole("button", { name: "Download" }));
     await waitFor(() => expect(download).toHaveBeenCalledWith(item, legacy));
+  });
+
+  it("shows a readable rejection and disables its download without adding a status column", async () => {
+    const user = userEvent.setup();
+    const rejected: SearchResultType = {
+      ...result,
+      rejected: true,
+      rejection: { id: 31, reason: "obvious_fragment" },
+    };
+    server.use(
+      http.get("/api/providers/movies", () =>
+        HttpResponse.json({ data: [rejected] }),
+      ),
+    );
+    const { download } = renderSearch();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Not matched");
+    expect(
+      screen.getByText(
+        "The subtitle contains only a short fragment of the video.",
+      ),
+    ).toBeVisible();
+    const downloadButton = screen.getByRole("button", { name: "Download" });
+    expect(downloadButton).toBeDisabled();
+    await user.click(downloadButton);
+    expect(download).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Allow retry" })).toBeEnabled();
+    expect(
+      screen.queryByRole("columnheader", { name: "Status" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it.each(["movie", "episode"] as const)(
+    "clears %s rejection with the media ID and search UUID, then refreshes without downloading",
+    async (mediaType) => {
+      const user = userEvent.setup();
+      let rejected = true;
+      const searchRequests: URLSearchParams[] = [];
+      const clearRequests: { form: FormData; params: URLSearchParams }[] = [];
+      const path =
+        mediaType === "movie"
+          ? "/api/providers/movies"
+          : "/api/providers/episodes";
+      server.use(
+        http.get(path, ({ request }) => {
+          searchRequests.push(new URL(request.url).searchParams);
+          return HttpResponse.json({
+            data: [
+              {
+                ...result,
+                rejected,
+                rejection: rejected
+                  ? {
+                      id: 31,
+                      reason: "timing_not_confirmed",
+                      detail: "Audio timing did not match this video.",
+                    }
+                  : null,
+              },
+            ],
+          });
+        }),
+        http.delete(path, async ({ request }) => {
+          clearRequests.push({
+            form: await request.formData(),
+            params: new URL(request.url).searchParams,
+          });
+          rejected = false;
+          return new HttpResponse(null, { status: 204 });
+        }),
+      );
+      const { item, download } = renderSearch(undefined, mediaType);
+      await user.type(
+        screen.getByRole("textbox", { name: "Search keyword" }),
+        "Known alias",
+      );
+      await user.click(screen.getByRole("button", { name: "Search" }));
+      await screen.findByText("Not matched");
+      expect(
+        screen.getByText("Audio timing did not match this video."),
+      ).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "Allow retry" }));
+      await waitFor(() =>
+        expect(screen.queryByText("Not matched")).not.toBeInTheDocument(),
+      );
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Download" })).toBeEnabled(),
+      );
+      expect(clearRequests).toHaveLength(1);
+      expect(
+        clearRequests[0].form.get(
+          mediaType === "movie" ? "radarrid" : "episodeid",
+        ),
+      ).toBe(mediaType === "movie" ? "9" : "47");
+      expect(clearRequests[0].form.get("subtitle")).toBe(
+        "chosen-subtitle-uuid",
+      );
+      expect(clearRequests[0].form.has("seriesid")).toBe(false);
+      expect(searchRequests).toHaveLength(2);
+      expect(searchRequests[1].get("keyword")).toBe("Known alias");
+      expect(download).not.toHaveBeenCalled();
+      await user.click(screen.getByRole("button", { name: "Download" }));
+      await waitFor(() =>
+        expect(download).toHaveBeenCalledWith(item, {
+          ...result,
+          rejected: false,
+          rejection: null,
+        }),
+      );
+    },
+  );
+
+  it("keeps a failed retry excluded and displays the error", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/providers/movies", () =>
+        HttpResponse.json({
+          data: [
+            {
+              ...result,
+              rejected: true,
+              rejection: { id: 1, reason: "timing_not_confirmed" },
+            },
+          ],
+        }),
+      ),
+      http.delete("/api/providers/movies", () =>
+        HttpResponse.json(
+          { message: "Could not clear the rejection" },
+          { status: 500 },
+        ),
+      ),
+    );
+    const { download } = renderSearch();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Not matched");
+    await user.click(screen.getByRole("button", { name: "Allow retry" }));
+    await screen.findByText("Subtitle action failed");
+    expect(screen.getByRole("button", { name: "Download" })).toBeDisabled();
+    expect(screen.getByText("Not matched")).toBeVisible();
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("renders rejection details as text even with empty release information", async () => {
+    const user = userEvent.setup();
+    const markup = '<img src="rejection-xss" onerror="alert(1)">';
+    server.use(
+      http.get("/api/providers/movies", () =>
+        HttpResponse.json({
+          data: [
+            {
+              ...result,
+              release_info: [],
+              rejected: true,
+              rejection: { id: 1, reason: "invalid_format", detail: markup },
+            },
+          ],
+        }),
+      ),
+    );
+    renderSearch();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText(markup);
+    expect(screen.getByText("Cannot get release info")).toBeVisible();
+    expect(screen.getByText("Not matched")).toBeVisible();
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+  });
+
+  it("treats the real download HTTP 204 response as queued instead of saved", async () => {
+    const user = userEvent.setup();
+    const queued = vi.fn();
+    server.use(
+      http.get("/api/providers/movies", () =>
+        HttpResponse.json({ data: [result] }),
+      ),
+      http.post("/api/providers/movies", async ({ request }) => {
+        const body = await request.formData();
+        queued(
+          new URL(request.url).searchParams.get("radarrid"),
+          body.get("subtitle"),
+        );
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    renderSearch(async (item, candidate) => {
+      await providerApi.downloadMovieSubtitle((item as Item.Movie).radarrId, {
+        language: candidate.language,
+        provider: candidate.provider,
+        subtitle: String(candidate.subtitle),
+        hi: candidate.hearing_impaired,
+        forced: candidate.forced,
+        original_format: candidate.original_format,
+      });
+    });
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Maria.Holic.CHS.ass");
+    await user.click(screen.getByRole("button", { name: "Download" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Queued" })).toBeDisabled(),
+    );
+    expect(queued).toHaveBeenCalledWith("9", "chosen-subtitle-uuid");
+    expect(
+      screen.queryByRole("button", { name: "Downloaded" }),
+    ).not.toBeInTheDocument();
   });
 });

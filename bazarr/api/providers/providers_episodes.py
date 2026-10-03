@@ -7,7 +7,7 @@ from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from app.database import TableEpisodes, TableShows, database, select, get_subtitles
 from utilities.path_mappings import path_mappings
 from app.get_providers import get_providers
-from subtitles.manual import manual_search, episode_manually_download_specific_subtitle, validate_manual_search_options
+from subtitles.manual import manual_search, episode_manually_download_specific_subtitle, validate_manual_search_options, clear_manual_rejection
 from app.config import settings
 from app.jobs_queue import jobs_queue
 from subtitles.indexer.series import store_subtitles, list_missing_subtitles
@@ -26,6 +26,10 @@ class ProviderEpisodes(Resource):
     get_request_parser.add_argument('providers', type=str, action='append', location='args', required=False,
                                     help='Enabled subtitle providers to search (repeat for multiple providers)')
 
+    rejection_model = api_ns_providers_episodes.model('ProvidersEpisodeRejection', {
+        'id': fields.Integer(), 'reason': fields.String(), 'detail': fields.String(),
+        'member': fields.String(), 'timestamp': fields.String(),
+    })
     get_response_model = api_ns_providers_episodes.model('ProviderEpisodesGetResponse', {
         'dont_matches': fields.List(fields.String),
         'forced': fields.String(),
@@ -37,6 +41,8 @@ class ProviderEpisodes(Resource):
         'provider': fields.String(),
         'release_info': fields.List(fields.String),
         'tags': fields.List(fields.String),
+        'rejected': fields.Boolean(default=False),
+        'rejection': fields.Nested(rejection_model, allow_null=True),
         'score': fields.Integer(),
         'score_without_hash': fields.Integer(),
         'subtitle': fields.String(),
@@ -127,3 +133,17 @@ class ProviderEpisodes(Resource):
                                                     job_id=None)
 
         return '', 204
+
+    delete_request_parser = reqparse.RequestParser()
+    delete_request_parser.add_argument('episodeid', type=int, required=True, help='Media ID')
+    delete_request_parser.add_argument('subtitle', type=str, required=True, help='Candidate cache UUID')
+
+    @authenticate
+    @api_ns_providers_episodes.doc(parser=delete_request_parser)
+    @api_ns_providers_episodes.response(204, 'Rejection cleared; search again before downloading')
+    @api_ns_providers_episodes.response(400, 'Candidate belongs to different media')
+    @api_ns_providers_episodes.response(404, 'Candidate cache expired')
+    def delete(self):
+        """Allow retrying this rejected candidate without starting a download."""
+        args = self.delete_request_parser.parse_args()
+        return clear_manual_rejection('series', args.get('episodeid'), args.get('subtitle'))

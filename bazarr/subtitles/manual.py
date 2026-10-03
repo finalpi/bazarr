@@ -33,6 +33,7 @@ from bazarr.subtitles.cache import subtitle_cache
 from .pool import update_pools, _get_pool, _manual_search_pool
 from .utils import get_video, _get_lang_obj, _get_scores, _set_forced_providers
 from .processing import process_subtitle
+from .rejections import load_rejections, get_rejection, record_rejection, clear_rejection
 
 
 def validate_manual_search_options(keyword, providers, available_providers):
@@ -83,6 +84,7 @@ def _manual_search_with_pool(path, profile_id, providers, sceneName, title, medi
         logging.info("BAZARR All providers are throttled")
         return 'All providers are throttled'
     if video:
+        rejection_records = load_rejections(video)
         try:
             if providers:
                 subtitles = list_all_subtitles([video], language_set, pool)
@@ -157,6 +159,7 @@ def _manual_search_with_pool(path, profile_id, providers, sceneName, title, medi
                 if original_format in (1, "1", "True", True):
                     s.use_original_format = True
 
+                rejection = get_rejection(video, s, records=rejection_records)
                 subtitles_list.append(
                     dict(score=round((score / max_score * 100), 2),
                          orig_score=score,
@@ -172,6 +175,8 @@ def _manual_search_with_pool(path, profile_id, providers, sceneName, title, medi
                          dont_matches=list(not_matched),
                          release_info=releases,
                          tags=tags,
+                         rejected=rejection is not None,
+                         rejection=rejection,
                          uploader=s_uploader))
 
             final_subtitles = sorted(subtitles_list, key=lambda x: (x['orig_score'], x['score_without_hash']),
@@ -182,6 +187,19 @@ def _manual_search_with_pool(path, profile_id, providers, sceneName, title, medi
     subliminal.region.backend.sync()
 
     return final_subtitles
+
+
+def clear_manual_rejection(media_type, media_id, cache_key):
+    """Only restore a candidate belonging to this movie or episode."""
+    subtitle = subtitle_cache.get(cache_key)
+    if subtitle is None:
+        return 'Subtitle cache expired. Please search again.', 404
+    video = getattr(subtitle, 'video', None)
+    identity = 'radarrId' if media_type == 'movie' else 'sonarrEpisodeId'
+    if video is None or getattr(video, identity, None) != media_id:
+        return 'Subtitle candidate does not belong to this media.', 400
+    clear_rejection(video, subtitle)
+    return '', 204
 
 
 def _safe_manual_text(value, limit=500):
@@ -367,6 +385,10 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
             subtitle.video = video
         elif getattr(video, 'duration', None) is not None:
             candidate_video.duration = video.duration
+        rejection = get_rejection(video, subtitle)
+        if rejection:
+            return 'This subtitle was excluded after validation: ' + _safe_manual_text(
+                rejection.get('detail') or rejection['reason']) + '. Use Allow retry before downloading it again.'
         try:
             if provider:
                 download_subtitles([subtitle], _get_pool(media_type, profile_id))
@@ -384,6 +406,7 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
             return 'Error downloading subtitles (%s)' % type(error).__name__
         else:
             if not subtitle.is_valid():
+                record_rejection(video, subtitle, getattr(subtitle, 'download_failure_reason', None))
                 logging.error(f"BAZARR Downloaded subtitles isn't valid for this file: {path}")
                 return "Downloaded subtitles isn't valid. Check log."
             if progress:

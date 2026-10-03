@@ -8,7 +8,7 @@ import flask_migrate
 import signal
 
 from dogpile.cache import make_region
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 
 from sqlalchemy import create_engine, inspect, DateTime, ForeignKey, Integer, LargeBinary, Text, func, text, BigInteger, \
@@ -248,6 +248,32 @@ class TableHistoryMovie(Base):
     matched = mapped_column(Text)
     not_matched = mapped_column(Text)
     upgradedFromId = mapped_column(Integer, ForeignKey('table_history_movie.id'))
+
+
+class TableSubtitleRejections(Base):
+    __tablename__ = 'table_subtitle_rejections'
+
+    id = mapped_column(Integer, primary_key=True)
+    media_type = mapped_column(Text, nullable=False)
+    media_id = mapped_column(Integer, nullable=False)
+    video_fingerprint = mapped_column(Text, nullable=False)
+    video_path = mapped_column(Text, nullable=False)
+    video_size = mapped_column(BigInteger, nullable=False)
+    video_mtime_ns = mapped_column(BigInteger, nullable=False)
+    original_language = mapped_column(Text, nullable=False)
+    provider = mapped_column(Text, nullable=False)
+    subtitle_id_digest = mapped_column(Text, nullable=False)
+    language = mapped_column(Text, nullable=False)
+    forced = mapped_column(Boolean, nullable=False, default=False)
+    reason = mapped_column(Text, nullable=False)
+    detail = mapped_column(Text)
+    member = mapped_column(Text)
+    timestamp = mapped_column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        UniqueConstraint('media_type', 'media_id', 'video_fingerprint', 'provider', 'subtitle_id_digest',
+                         'language', 'forced', name='uc_subtitle_rejection_identity'),
+    )
 
 
 class TableLanguagesProfiles(Base):

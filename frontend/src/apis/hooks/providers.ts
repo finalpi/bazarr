@@ -82,6 +82,20 @@ export function useResetProvider() {
   });
 }
 
+export function useClearProviderRejection() {
+  return useMutation({
+    mutationKey: [QueryKeys.System, QueryKeys.Providers, "clear-rejection"],
+    mutationFn: (param: {
+      mediaType: "movie" | "episode";
+      id: number;
+      subtitle: string;
+    }) =>
+      param.mediaType === "movie"
+        ? api.providers.clearMovieRejection(param.id, param.subtitle)
+        : api.providers.clearEpisodeRejection(param.id, param.subtitle),
+  });
+}
+
 export function useDownloadEpisodeSubtitles() {
   const client = useQueryClient();
 

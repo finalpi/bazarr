@@ -13,12 +13,17 @@ from sonarr.blacklist import get_blacklist
 from app.get_providers import get_providers, get_providers_auth, provider_throttle, provider_pool, get_language_equals
 
 from .utils import get_ban_list
+from .rejections import get_rejection, record_rejection
+
+
+def _record_provider_rejection(video, subtitle):
+    return record_rejection(video, subtitle, getattr(subtitle, 'download_failure_reason', None))
 
 
 # fmt: on
 def _init_pool(media_type, profile_id=None, providers=None, provider_configs=None):
     pool = provider_pool()
-    return pool(
+    instance = pool(
         providers=get_providers() if providers is None else providers,
         provider_configs=get_providers_auth() if provider_configs is None else provider_configs,
         blacklist=get_blacklist() if media_type == "series" else get_blacklist_movie(),
@@ -27,6 +32,9 @@ def _init_pool(media_type, profile_id=None, providers=None, provider_configs=Non
         language_hook=None,
         language_equals=get_language_equals(),
     )
+    instance.subtitle_rejection_check = get_rejection
+    instance.subtitle_rejection_record = _record_provider_rejection
+    return instance
 
 
 @contextmanager

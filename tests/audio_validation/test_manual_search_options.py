@@ -91,7 +91,7 @@ def load_search_api(media_type, search):
     api_class = next(node for node in tree.body if isinstance(node, ast.ClassDef))
     parser_nodes = []
     for node in api_class.body:
-        if isinstance(node, ast.Assign) and node.targets[0].id == 'get_response_model':
+        if isinstance(node, ast.Assign) and node.targets[0].id in ('rejection_model', 'get_response_model'):
             break
         parser_nodes.append(node)
     get_method = next(node for node in api_class.body if isinstance(node, ast.FunctionDef) and node.name == 'get')
@@ -153,7 +153,7 @@ def test_search_api_rejects_invalid_options_before_search(media_type, id_name, o
 
 
 def test_request_pool_keeps_auth_limits_and_blacklists_without_falling_back_to_all_sources():
-    factory = Mock(return_value=object())
+    factory = Mock(return_value=SimpleNamespace())
     namespace = load_functions('bazarr/subtitles/pool.py', {'_init_pool'}, {
         'provider_pool': lambda: factory,
         'get_providers': lambda: AVAILABLE,
@@ -163,6 +163,8 @@ def test_request_pool_keeps_auth_limits_and_blacklists_without_falling_back_to_a
         'provider_throttle': 'existing-throttle',
         'get_ban_list': lambda profile_id: {'must_not_contain': ['sample']},
         'get_language_equals': lambda: ['existing-language-rule'],
+        'get_rejection': lambda *args, **kwargs: None,
+        '_record_provider_rejection': lambda *args: None,
     })
     namespace['_init_pool']('series', 1, providers=['r3sub'])
     assert factory.call_args.kwargs == {
@@ -191,6 +193,8 @@ def manual_namespace(pool, video, subtitles, cached):
         '_get_language_obj': lambda **kwargs: ({CHINESE}, True),
         '_set_forced_providers': lambda **kwargs: None,
         'get_video': lambda *args, **kwargs: video,
+        'load_rejections': lambda video: {},
+        'get_rejection': lambda *args, **kwargs: None,
         'force_unicode': str,
         'list_all_subtitles': list_subtitles,
         'settings': SimpleNamespace(general=SimpleNamespace(minimum_score=0, minimum_score_movie=0)),
@@ -245,6 +249,8 @@ def request_pool_factory(config):
         'provider_throttle': lambda *args, **kwargs: None,
         'get_ban_list': lambda profile_id: {},
         'get_language_equals': lambda: [],
+        'get_rejection': lambda *args, **kwargs: None,
+        '_record_provider_rejection': lambda *args: None,
     })
     return contextmanager(namespace['_manual_search_pool'])
 
