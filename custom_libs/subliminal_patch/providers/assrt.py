@@ -13,7 +13,7 @@ from math import ceil
 from subliminal import Movie, Episode
 from subliminal.exceptions import ConfigurationError, ProviderError
 from subliminal_patch.subtitle import Subtitle, guess_matches
-from subliminal_patch.chinese import normalize_name
+from subliminal_patch.chinese import normalize_name, select_archive_entry
 from subliminal.subtitle import fix_line_ending
 from subliminal_patch.providers import Provider
 from subzero.language import Language
@@ -115,6 +115,15 @@ class AssrtSubtitle(Subtitle):
             ]
             if episode_files:
                 files = episode_files
+
+        # Chinese packs use the same bilingual-first preference as the other providers.
+        if self.language.alpha3 == 'zho':
+            selected = select_archive_entry(
+                [f['f'] for f in files], season=self._target_season,
+                episode=self._target_episode, desired_language=str(self.language))
+            if selected:
+                self._detail = next(f for f in files if f['f'] == selected)
+                return self._detail
 
         # first pass: guessit
         for f in files:

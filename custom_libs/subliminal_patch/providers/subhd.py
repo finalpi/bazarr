@@ -25,7 +25,7 @@ from subliminal.exceptions import ConfigurationError
 from subliminal.subtitle import fix_line_ending
 
 from subliminal_patch.chinese import (
-    _episode_markers, normalize_name, rank_archive_entries, search_title_variants, title_variants,
+    _episode_markers, archive_entry_score, normalize_name, search_title_variants, title_variants,
 )
 from subliminal_patch.providers import Provider
 from subliminal_patch.subtitle import Subtitle, guess_matches
@@ -128,30 +128,63 @@ def _detect_subtitle_format(content, fallback=None):
     return fallback
 
 
+def _archive_member_score(name, criteria, episode_context=None):
+    if episode_context and not _episode_markers(name):
+        name = episode_context + '.' + os.path.basename(name)
+    return archive_entry_score(name, **criteria)
+
+
+def _rank_archive_members(names, criteria, episode_context=None):
+    scored = []
+    for index, name in enumerate(names):
+        score = _archive_member_score(name, criteria, episode_context)
+        if score is not None:
+            scored.append((score, -index, name))
+    return [entry[2] for entry in sorted(scored, reverse=True)]
+
+
+def _archive_episode_context(name, criteria, previous=None):
+    # An explicitly selected episode archive supplies identity for filenames
+    # such as "chs&eng.srt" without supplying its language or format hints.
+    for season, episode in sorted(_episode_markers(name), key=lambda marker: marker[0] is None):
+        marker = 'S%02dE%02d' % (season, episode) if season is not None else 'E%02d' % episode
+        if _matches_archive_episode(marker, criteria):
+            return marker
+    return previous
+
+
 def _extract_download(content, subtitle, _depth=0, _budget=None):
+    extracted, subtitle_format, _ = _extract_download_best(content, subtitle, _depth, _budget)
+    return extracted, subtitle_format
+
+
+def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_context=None, _fallback_name=None):
     if _depth >= _MAX_ARCHIVE_DEPTH:
-        return None, None
+        return None, None, None
     if _budget is None:
         _budget = [_MAX_EXTRACTED_BYTES]
+    criteria = dict(
+        season=getattr(subtitle.video, 'season', None),
+        episode=getattr(subtitle.video, 'episode', None),
+        absolute_episode=getattr(subtitle.video, 'absolute_episode', None),
+        desired_language=str(subtitle.language), hearing_impaired=subtitle.hearing_impaired,
+        forced=subtitle.language.forced)
     names, reader, closer = _archive_names_and_reader(content)
     if names is not None:
         try:
-            criteria = dict(
-                season=getattr(subtitle.video, 'season', None),
-                episode=getattr(subtitle.video, 'episode', None),
-                absolute_episode=getattr(subtitle.video, 'absolute_episode', None),
-                desired_language=str(subtitle.language), hearing_impaired=subtitle.hearing_impaired,
-                forced=subtitle.language.forced)
-            ranked = rank_archive_entries(
-                [name for name in names if _matches_archive_episode(name, criteria)], **criteria)
+            best = (None, None, None)
+            ranked = _rank_archive_members(
+                [name for name in names if _matches_archive_episode(name, criteria)], criteria, _episode_context)
             for selected in ranked[:_MAX_ARCHIVE_CANDIDATES]:
+                if _budget[0] <= 0:
+                    break
                 try:
                     extracted = reader(selected, min(_MAX_ARCHIVE_MEMBER_BYTES, _budget[0]))
                 except (OSError, ValueError, RuntimeError, BadZipFile, rarfile.Error):
                     logger.debug('Skipping unreadable SubHD archive member: %s', selected, exc_info=True)
                     continue
                 if len(extracted) > _budget[0]:
-                    return None, None
+                    return best
                 _budget[0] -= len(extracted)
                 extension = os.path.splitext(selected)[1].lstrip('.').lower()
                 subtitle_format = _detect_subtitle_format(extracted, extension)
@@ -162,20 +195,23 @@ def _extract_download(content, subtitle, _depth=0, _budget=None):
                 candidate._is_valid = False
                 candidate._guessed_encoding = None
                 if candidate.is_valid():
-                    return extracted, subtitle_format
+                    best = (extracted, subtitle_format, _archive_member_score(selected, criteria, _episode_context))
+                    break
                 logger.debug('Skipping invalid SubHD archive member: %s', selected)
             # Some season releases contain one archive per episode instead of
             # subtitle files. Rank their explicit episode markers through the
             # same criteria, then read only matching inner archives.
             if _depth + 1 >= _MAX_ARCHIVE_DEPTH:
-                return None, None
+                return best
             nested = {
                 name + '.srt': name for name in names
                 if os.path.splitext(name)[1].lower() in _ARCHIVE_EXTENSIONS and
                 (criteria['episode'] is None or _episode_markers(name)) and
                 _matches_archive_episode(name, criteria)
             }
-            for virtual_name in rank_archive_entries(nested, **criteria)[:_MAX_ARCHIVE_CANDIDATES]:
+            for virtual_name in _rank_archive_members(nested, criteria, _episode_context)[:_MAX_ARCHIVE_CANDIDATES]:
+                if _budget[0] <= 0:
+                    break
                 selected = nested[virtual_name]
                 try:
                     inner = reader(selected, min(_MAX_ARCHIVE_MEMBER_BYTES, _budget[0]))
@@ -183,16 +219,37 @@ def _extract_download(content, subtitle, _depth=0, _budget=None):
                     logger.debug('Skipping unreadable nested SubHD archive: %s', selected, exc_info=True)
                     continue
                 if len(inner) > _budget[0]:
-                    return None, None
+                    return best
                 _budget[0] -= len(inner)
-                extracted, subtitle_format = _extract_download(inner, subtitle, _depth + 1, _budget)
-                if extracted and subtitle_format:
-                    return extracted, subtitle_format
-            return None, None
+                try:
+                    candidate = _extract_download_best(
+                        inner, subtitle, _depth + 1, _budget,
+                        _archive_episode_context(selected, criteria, _episode_context), virtual_name)
+                except (OSError, ValueError, RuntimeError, BadZipFile, rarfile.Error):
+                    logger.debug('Skipping invalid nested SubHD archive: %s', selected, exc_info=True)
+                    continue
+                if candidate[0] and candidate[1] and candidate[2] is not None:
+                    if best[2] is None or candidate[2] > best[2]:
+                        best = candidate
+            return best
         finally:
             closer()
 
-    return content, _detect_subtitle_format(content)
+    subtitle_format = _detect_subtitle_format(content)
+    if _fallback_name is None:
+        # Preserve the direct, non-archive download behavior.
+        return content, subtitle_format, None
+    if not subtitle_format:
+        return None, None, None
+    candidate = copy.copy(subtitle)
+    candidate.content = fix_line_ending(content)
+    candidate.use_original_format = True
+    candidate.format = subtitle_format
+    candidate._is_valid = False
+    candidate._guessed_encoding = None
+    if not candidate.is_valid():
+        return None, None, None
+    return content, subtitle_format, _archive_member_score(_fallback_name, criteria, _episode_context)
 
 
 class SubhdSubtitle(Subtitle):

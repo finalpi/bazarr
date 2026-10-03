@@ -34,6 +34,10 @@ def _duration(path):
 
 def _language_matches(filename, language):
     hint = subtitle_language_hint(filename)
+    if hint == 'bilingual':
+        script = subtitle_language_hint(filename, include_bilingual=False)
+        if script in ('zh', 'zt'):
+            hint = script
     traditional = language.country == 'TW' or language.script == 'Hant'
     if traditional:
         return hint == 'zt'

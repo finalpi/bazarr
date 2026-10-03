@@ -8,10 +8,12 @@ import re
 
 SUBTITLE_EXTENSIONS = ('.ass', '.ssa', '.srt', '.vtt', '.smi', '.sami', '.sup', '.idx', '.sub')
 
-_SIMPLIFIED = ('zh', 'zho', 'chs', 'sc', 'gb', 'zh-cn', 'zh_hans', 'zh-hans', '简体', '简中', '简')
+_SIMPLIFIED = ('zh', 'zho', 'chs', 'sc', 'gb', 'zh-cn', 'zh_hans', 'zh-hans',
+               '简体', '簡體', '简中', '簡中', '简', '簡')
 _TRADITIONAL = ('zt', 'zht', 'cht', 'tc', 'big5', 'zh-tw', 'zh_hant', 'zh-hant',
                 '繁体', '繁體', '繁中', '繁')
-_BILINGUAL = ('bilingual', 'dual', 'chs&eng', 'chi&eng', '中英', '双语', '雙語')
+_BILINGUAL = ('bilingual', 'dual', 'chs&eng', 'cht&eng', 'chi&eng', 'zht&eng',
+              '简英', '簡英', '繁英', '中英', '双语', '雙語')
 _FOREIGN = ('english', ' eng ', '.eng.', '.en.', 'japanese', '.jpn.', '.ja.', '日语', '日語', '韩语', '韓語')
 _INCOMPLETE = ('sample', 'preview', 'trailer', '片段', '预览', '預覽', '仅特效', '僅特效',
                'signs.only', 'songs.only', 'op only', 'ed only')
@@ -23,12 +25,13 @@ def normalize_name(value):
     return re.sub(r'[^0-9a-z\u3400-\u9fff]+', '', (value or '').lower())
 
 
-def subtitle_language_hint(filename):
+def subtitle_language_hint(filename, include_bilingual=True):
+    """Identify the language, optionally retaining the Chinese script of bilingual files."""
     value = filename.lower()
     tokens = set(filter(None, re.split(r'[^0-9a-z\u3400-\u9fff]+', value)))
-    if any(token in value for token in _BILINGUAL):
+    if include_bilingual and any(token in value for token in _BILINGUAL):
         return 'bilingual'
-    if (re.search(r'(?i)(?:^|[._ -])zh[-_ ]?(?:tw|hant)(?:$|[._ -])', value) or
+    if (re.search(r'(?i)(?:^|[._ -])zh[-_ ]?(?:tw|hant)(?:$|[._ &+-])', value) or
             any((token in tokens if token.isascii() else token in value) for token in _TRADITIONAL)):
         return 'zt'
     if any((token in tokens if token.isascii() else token in value) for token in _SIMPLIFIED):
@@ -85,11 +88,17 @@ def archive_entry_score(filename, season=None, episode=None, absolute_episode=No
     language = subtitle_language_hint(basename)
     desired = str(desired_language or '')
     wants_traditional = desired in ('zt', 'zh-TW', 'zht') or 'Hant' in desired
-    if wants_traditional:
-        score += {'zt': 180, 'bilingual': 130, 'zh-unknown': 80, None: 20, 'zh': -30,
+    if language == 'bilingual':
+        # Prefer bilingual dialogue before format, then the requested Chinese script.
+        score += 260
+        preferred_script = 'zt' if wants_traditional else 'zh'
+        if subtitle_language_hint(basename, include_bilingual=False) == preferred_script:
+            score += 60
+    elif wants_traditional:
+        score += {'zt': 180, 'zh-unknown': 80, None: 20, 'zh': -30,
                   'foreign': -500}.get(language, 0)
     else:
-        score += {'zh': 180, 'bilingual': 150, 'zh-unknown': 90, None: 20, 'zt': 20,
+        score += {'zh': 180, 'zh-unknown': 90, None: 20, 'zt': 20,
                   'foreign': -500}.get(language, 0)
 
     is_forced = any(token in lower for token in ('forced', 'foreign.only', '强制', '強制'))
