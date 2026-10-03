@@ -13,7 +13,7 @@ import re
 import subprocess
 import tempfile
 import time
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 from zipfile import BadZipFile, ZipFile, is_zipfile
 
 import rarfile
@@ -24,7 +24,9 @@ from subliminal import Episode, Movie
 from subliminal.exceptions import ConfigurationError
 from subliminal.subtitle import fix_line_ending
 
-from subliminal_patch.chinese import normalize_name, rank_archive_entries, search_title_variants, title_variants
+from subliminal_patch.chinese import (
+    _episode_markers, normalize_name, rank_archive_entries, search_title_variants, title_variants,
+)
 from subliminal_patch.providers import Provider
 from subliminal_patch.subtitle import Subtitle, guess_matches
 
@@ -37,23 +39,72 @@ _TRUSTED_DOWNLOAD_SUFFIXES = ('.subhd.me', '.subhd.tv', '.subhd.com')
 _USER_AGENT = ('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
                'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
 _SUBTITLE_EXTENSIONS = ('.ass', '.ssa', '.srt', '.vtt', '.smi', '.sami', '.sup', '.idx', '.sub')
+_MAX_SEARCH_PAGES = 3
+_MAX_SEARCH_REQUESTS = 12
+_ARCHIVE_EXTENSIONS = ('.zip', '.rar', '.7z')
+_MAX_ARCHIVE_DEPTH = 3
+_MAX_ARCHIVE_MEMBER_BYTES = 32 * 1024 * 1024
+_MAX_EXTRACTED_BYTES = 64 * 1024 * 1024
+_MAX_ARCHIVE_CANDIDATES = 20
 
 
 def _archive_names_and_reader(content):
     stream = io.BytesIO(content)
     if is_zipfile(stream):
         archive = ZipFile(stream)
-        return archive.namelist(), archive.read, archive.close
+        return archive.namelist(), _bounded_archive_reader(archive), archive.close
     stream.seek(0)
     if rarfile.is_rarfile(stream):
         archive = rarfile.RarFile(stream)
-        return archive.namelist(), archive.read, archive.close
+        return archive.namelist(), _bounded_archive_reader(archive), archive.close
     if content.startswith(b"7z\xbc\xaf'\x1c"):
         from py7zr import SevenZipFile
         archive = SevenZipFile(io.BytesIO(content), mode='r')
-        files = archive.readall() or {}
-        return list(files), lambda name: files[name].read(), archive.close
+        files = {info.filename: info for info in archive.list() if not info.is_directory}
+
+        def reader(name, max_bytes=_MAX_ARCHIVE_MEMBER_BYTES):
+            if files[name].uncompressed > max_bytes:
+                raise ValueError('SubHD archive member exceeds the extraction size limit')
+            archive.reset()
+            extracted = archive.read(targets=[name]) or {}
+            member = extracted.get(name)
+            if member is None:
+                raise ValueError('SubHD 7z member was not extracted')
+            data = member.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                raise ValueError('SubHD archive member exceeds the extraction size limit')
+            return data
+
+        return list(files), reader, archive.close
     return None, None, None
+
+
+def _bounded_archive_reader(archive):
+    def reader(name, max_bytes=_MAX_ARCHIVE_MEMBER_BYTES):
+        if archive.getinfo(name).file_size > max_bytes:
+            raise ValueError('SubHD archive member exceeds the extraction size limit')
+        with archive.open(name) as member:
+            data = member.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise ValueError('SubHD archive member exceeds the extraction size limit')
+        return data
+    return reader
+
+
+def _matches_archive_episode(name, criteria):
+    episode = criteria['episode']
+    if episode is None:
+        return True
+    markers = _episode_markers(name)
+    if not markers:
+        return True
+    season = criteria['season']
+    absolute_episode = criteria['absolute_episode']
+    return any(
+        (ep == episode and (marked_season == season or season is None or
+                            (marked_season is None and absolute_episode is None))) or
+        (marked_season is None and absolute_episode is not None and ep == absolute_episode)
+        for marked_season, ep in markers)
 
 
 def _detect_subtitle_format(content, fallback=None):
@@ -77,21 +128,31 @@ def _detect_subtitle_format(content, fallback=None):
     return fallback
 
 
-def _extract_download(content, subtitle):
+def _extract_download(content, subtitle, _depth=0, _budget=None):
+    if _depth >= _MAX_ARCHIVE_DEPTH:
+        return None, None
+    if _budget is None:
+        _budget = [_MAX_EXTRACTED_BYTES]
     names, reader, closer = _archive_names_and_reader(content)
     if names is not None:
         try:
-            ranked = rank_archive_entries(
-                names,
+            criteria = dict(
                 season=getattr(subtitle.video, 'season', None),
                 episode=getattr(subtitle.video, 'episode', None),
                 absolute_episode=getattr(subtitle.video, 'absolute_episode', None),
-                desired_language=str(subtitle.language),
-                hearing_impaired=subtitle.hearing_impaired,
-                forced=subtitle.language.forced,
-            )
-            for selected in ranked:
-                extracted = reader(selected)
+                desired_language=str(subtitle.language), hearing_impaired=subtitle.hearing_impaired,
+                forced=subtitle.language.forced)
+            ranked = rank_archive_entries(
+                [name for name in names if _matches_archive_episode(name, criteria)], **criteria)
+            for selected in ranked[:_MAX_ARCHIVE_CANDIDATES]:
+                try:
+                    extracted = reader(selected, min(_MAX_ARCHIVE_MEMBER_BYTES, _budget[0]))
+                except (OSError, ValueError, RuntimeError, BadZipFile, rarfile.Error):
+                    logger.debug('Skipping unreadable SubHD archive member: %s', selected, exc_info=True)
+                    continue
+                if len(extracted) > _budget[0]:
+                    return None, None
+                _budget[0] -= len(extracted)
                 extension = os.path.splitext(selected)[1].lstrip('.').lower()
                 subtitle_format = _detect_subtitle_format(extracted, extension)
                 candidate = copy.copy(subtitle)
@@ -103,6 +164,30 @@ def _extract_download(content, subtitle):
                 if candidate.is_valid():
                     return extracted, subtitle_format
                 logger.debug('Skipping invalid SubHD archive member: %s', selected)
+            # Some season releases contain one archive per episode instead of
+            # subtitle files. Rank their explicit episode markers through the
+            # same criteria, then read only matching inner archives.
+            if _depth + 1 >= _MAX_ARCHIVE_DEPTH:
+                return None, None
+            nested = {
+                name + '.srt': name for name in names
+                if os.path.splitext(name)[1].lower() in _ARCHIVE_EXTENSIONS and
+                (criteria['episode'] is None or _episode_markers(name)) and
+                _matches_archive_episode(name, criteria)
+            }
+            for virtual_name in rank_archive_entries(nested, **criteria)[:_MAX_ARCHIVE_CANDIDATES]:
+                selected = nested[virtual_name]
+                try:
+                    inner = reader(selected, min(_MAX_ARCHIVE_MEMBER_BYTES, _budget[0]))
+                except (OSError, ValueError, RuntimeError, BadZipFile, rarfile.Error):
+                    logger.debug('Skipping unreadable nested SubHD archive: %s', selected, exc_info=True)
+                    continue
+                if len(inner) > _budget[0]:
+                    return None, None
+                _budget[0] -= len(inner)
+                extracted, subtitle_format = _extract_download(inner, subtitle, _depth + 1, _budget)
+                if extracted and subtitle_format:
+                    return extracted, subtitle_format
             return None, None
         finally:
             closer()
@@ -227,37 +312,93 @@ class SubhdProvider(Provider):
                 results[match.group(1)] = title
         return list(results.items())
 
+    @staticmethod
+    def _search_queries(video):
+        titles = search_title_variants(video)[:6]
+        queries = []
+        keyword = getattr(video, 'search_keyword', None)
+        for title in titles:
+            if isinstance(video, Episode) and not keyword:
+                queries.extend((
+                    '%s S%02dE%02d' % (title, video.season, video.episode),
+                    '%s S%02d' % (title, video.season),
+                    title,
+                ))
+            else:
+                queries.append(title)
+        if isinstance(video, Episode) and keyword and not re.search(
+                r'(?i)(?<![a-z0-9])s\d{1,2}(?!\d)|\bseason\s*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b|'
+                r'\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+season\b|'
+                r'第\s*[0-9一二三四五六七八九十百零〇两]+\s*季', keyword):
+            queries.append('%s S%02d' % (keyword, video.season))
+        return list(dict.fromkeys(queries))
+
+    @staticmethod
+    def _search_page_links(body, search_url):
+        origin = urlparse(search_url)
+        base_path = unquote(origin.path).rstrip('/')
+        page_path = re.compile(re.escape(base_path) + r'/(\d+)$')
+        links = []
+        for anchor in BeautifulSoup(body, 'html.parser').find_all('a', class_='page-link', href=True):
+            target = urlparse(urljoin(search_url, anchor['href']))
+            path = unquote(target.path).rstrip('/')
+            page_match = page_path.fullmatch(path)
+            if (target.scheme != origin.scheme or target.netloc.lower() != origin.netloc.lower() or
+                    target.query or target.fragment or not (path == base_path or page_match)):
+                continue
+            page_number = int(page_match.group(1)) if page_match else 1
+            suffix = '/%d' % page_number if page_number != 1 else ''
+            url = search_url.rstrip('/') + suffix
+            if url not in links:
+                links.append(url)
+        return links
+
     def list_subtitles(self, video, languages):
         subtitles = []
         seen = set()
-        titles = search_title_variants(video)[:6]
-        queries = []
-        if isinstance(video, Episode) and not getattr(video, 'search_keyword', None):
-            queries.extend('%s S%02dE%02d' % (title, video.season, video.episode) for title in titles)
-        queries.extend(titles)
-        for query in queries:
-            found_for_title = False
+        requests_made = 0
+        for query in self._search_queries(video):
             for host in _SEARCH_MIRRORS:
-                try:
-                    body = self._request(
-                        host + '/search/' + quote(query, safe=''), timeout=15).decode('utf-8', 'replace')
-                    parsed = self._parse_results(body)
-                    if not parsed:
+                search_url = host + '/search/' + quote(query, safe='')
+                pages = [search_url]
+                visited = set()
+                request_failed = False
+                while pages and len(visited) < _MAX_SEARCH_PAGES and requests_made < _MAX_SEARCH_REQUESTS:
+                    page_url = pages.pop(0)
+                    if page_url in visited:
                         continue
+                    visited.add(page_url)
+                    requests_made += 1
+                    try:
+                        body = self._request(page_url, timeout=15).decode('utf-8', 'replace')
+                    except (OSError, subprocess.SubprocessError):
+                        logger.debug('SubHD search failed on %s', page_url, exc_info=True)
+                        request_failed = True
+                        break
+                    parsed = self._parse_results(body)
                     for subtitle_id, release in parsed[:30]:
                         for language in languages:
                             key = (subtitle_id, str(language))
                             if key in seen:
                                 continue
+                            subtitle = self.subtitle_class(
+                                language, subtitle_id, host + '/a/' + subtitle_id, release, video)
+                            matches = subtitle.get_matches(video)
+                            if isinstance(video, Episode) and not {'series', 'season', 'episode'} <= matches:
+                                continue
+                            subtitle.matches = matches
                             seen.add(key)
-                            subtitles.append(self.subtitle_class(
-                                language, subtitle_id, host + '/a/' + subtitle_id, release, video))
-                    found_for_title = True
+                            subtitles.append(subtitle)
+                    if subtitles:
+                        return subtitles
+                    pages.extend(url for url in self._search_page_links(body, search_url)
+                                 if url not in visited and url not in pages)
+                if requests_made >= _MAX_SEARCH_REQUESTS:
+                    return subtitles
+                if not request_failed:
+                    # Mirrors share search results. A valid empty or mismatched
+                    # page should move to the next query, not every mirror.
                     break
-                except (OSError, subprocess.SubprocessError):
-                    logger.debug('SubHD search failed on %s', host, exc_info=True)
-            if found_for_title:
-                break
         return subtitles
 
     def download_subtitle(self, subtitle):

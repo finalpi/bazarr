@@ -339,7 +339,7 @@ def test_subhd_and_r3sub_search_the_exact_keyword_without_replacing_metadata():
     video = episode()
     video.search_keyword = '中文别名 S03E02'
     subhd = SubhdProvider()
-    subhd._request = Mock(return_value=b'<div><a href="/a/Ab12">Chinese result</a></div>')
+    subhd._request = Mock(return_value='<div><a href="/a/Ab12">中文别名 S03E02</a></div>'.encode('utf-8'))
     assert len(subhd.list_subtitles(video, {CHINESE})) == 1
     assert unquote(urlparse(subhd._request.call_args.args[0]).path) == '/search/中文别名 S03E02'
     r3sub = R3subProvider(email='configured', password='configured')
