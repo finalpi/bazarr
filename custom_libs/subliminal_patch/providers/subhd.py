@@ -3,6 +3,7 @@
 """SubHD provider using the current temporary-download protocol."""
 
 import html
+import codecs
 import io
 import json
 import logging
@@ -228,7 +229,7 @@ def _detect_subtitle_format(content, fallback=None):
     text = None
     for encoding in ('utf-8-sig', 'utf-16', 'utf-16-le', 'utf-16-be'):
         try:
-            text = probe.decode(encoding)
+            text = codecs.getincrementaldecoder(encoding)(errors='strict').decode(probe, final=False)
         except (UnicodeDecodeError, UnicodeError):
             continue
         if '[Script Info]' in text or '-->' in text or text.lstrip().startswith('WEBVTT'):
@@ -241,6 +242,13 @@ def _detect_subtitle_format(content, fallback=None):
             return 'vtt'
         if '-->' in text:
             return 'srt'
+    # Text in legacy Chinese encodings still has ASCII format headers/timestamps.
+    if b'[Script Info]' in probe or b'[V4+ Styles]' in probe or b'[Events]' in probe:
+        return 'ass'
+    if probe.lstrip().startswith(b'WEBVTT'):
+        return 'vtt'
+    if re.search(rb'\d{1,2}:\d{2}:\d{2}[,.]\d+\s*-->\s*\d{1,2}:\d{2}:\d{2}', probe):
+        return 'srt'
     return fallback
 
 

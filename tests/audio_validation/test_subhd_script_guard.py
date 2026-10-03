@@ -183,3 +183,22 @@ def test_downloaded_wrong_script_package_is_rejected_without_refetching_it():
     assert target.content is None
     assert target.language.basename == 'zh-TW'
     assert provider._request.call_count == 4
+
+
+def test_direct_chinese_utf8_format_probe_can_end_inside_a_multibyte_character():
+    text = SIMPLIFIED + '文' * 3100
+    payload = srt(text)
+    while True:
+        try:
+            payload[:8192].decode('utf-8')
+        except UnicodeDecodeError:
+            break
+        text = ' ' + text
+        payload = srt(text)
+    assert _extract_download(payload, subtitle(ZH)) == (payload, 'srt')
+
+
+@pytest.mark.parametrize('language,text,encoding', [(ZH, SIMPLIFIED, 'cp936'), (TW, TRADITIONAL, 'cp950')])
+def test_direct_legacy_chinese_encoding_still_detects_srt_before_script_validation(language, text, encoding):
+    payload = srt(text).decode('utf-8').encode(encoding)
+    assert _extract_download(payload, subtitle(language)) == (payload, 'srt')
