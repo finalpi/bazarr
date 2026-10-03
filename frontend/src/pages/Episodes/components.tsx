@@ -1,7 +1,8 @@
 import { FunctionComponent, useMemo, useState } from "react";
-import { Badge, MantineColor } from "@mantine/core";
+import { Badge, Box, MantineColor } from "@mantine/core";
 import { useEpisodeSubtitleModification } from "@/apis/hooks";
 import Language from "@/components/bazarr/Language";
+import SubtitleSource from "@/components/SubtitleSource";
 import SubtitleToolsMenu from "@/components/SubtitleToolsMenu";
 import { toPython } from "@/utilities";
 
@@ -24,13 +25,7 @@ export const Subtitle: FunctionComponent<Props> = ({
 
   const embedded = subtitle.path === null && subtitle.embedded_track_id != null;
   const disabled = subtitle.path === null && !embedded;
-  const source = missing
-    ? "MISSING"
-    : embedded
-      ? "EMBEDDED"
-      : subtitle.path?.toLowerCase().includes(".llm.")
-        ? "LLM"
-        : undefined;
+  const source = missing ? "MISSING" : undefined;
 
   const variant: MantineColor | undefined = useMemo(() => {
     if (opened && !disabled) {
@@ -69,13 +64,20 @@ export const Subtitle: FunctionComponent<Props> = ({
   ]);
 
   const ctx = (
-    <Badge variant={variant}>
-      <Language.Text
-        value={subtitle}
-        long={false}
-        source={source}
-      ></Language.Text>
-    </Badge>
+    <Box
+      component="span"
+      display="inline-flex"
+      style={{ flexDirection: "column", alignItems: "center", maxWidth: 90 }}
+    >
+      <Badge variant={variant}>
+        <Language.Text
+          value={subtitle}
+          long={false}
+          source={source}
+        ></Language.Text>
+      </Badge>
+      <SubtitleSource subtitle={subtitle} compact missing={missing} />
+    </Box>
   );
 
   return (

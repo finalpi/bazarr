@@ -8,6 +8,9 @@ LABEL org.opencontainers.image.source="https://github.com/finalpi/bazarr" \
       org.opencontainers.image.description="Bazarr with subtitle timing validation, contextual translation, and styled ASS output"
 COPY bazarr/app/config.py bazarr/app/database.py bazarr/app/get_providers.py /app/bazarr/bin/bazarr/app/
 COPY bazarr/api/__init__.py /app/bazarr/bin/bazarr/api/__init__.py
+COPY bazarr/api/swaggerui.py bazarr/api/utils.py /app/bazarr/bin/bazarr/api/
+COPY bazarr/api/movies/movies.py /app/bazarr/bin/bazarr/api/movies/movies.py
+COPY bazarr/api/episodes/episodes.py /app/bazarr/bin/bazarr/api/episodes/episodes.py
 COPY bazarr/api/subtitles/subtitles.py /app/bazarr/bin/bazarr/api/subtitles/subtitles.py
 COPY bazarr/api/subtitles/subtitles_info.py /app/bazarr/bin/bazarr/api/subtitles/subtitles_info.py
 COPY bazarr/api/providers/providers_episodes.py bazarr/api/providers/providers_movies.py /app/bazarr/bin/bazarr/api/providers/
@@ -15,6 +18,7 @@ COPY bazarr/api/jellyfin/ /app/bazarr/bin/bazarr/api/jellyfin/
 COPY bazarr/jellyfin/ /app/bazarr/bin/bazarr/jellyfin/
 COPY bazarr/subtitles/audio_validation.py bazarr/subtitles/download.py bazarr/subtitles/manual.py bazarr/subtitles/pool.py bazarr/subtitles/processing.py bazarr/subtitles/embedded_translation.py bazarr/subtitles/translation_priority.py bazarr/subtitles/upload.py /app/bazarr/bin/bazarr/subtitles/
 COPY bazarr/subtitles/audio_reference.py /app/bazarr/bin/bazarr/subtitles/audio_reference.py
+COPY bazarr/subtitles/provenance.py /app/bazarr/bin/bazarr/subtitles/provenance.py
 COPY bazarr/subtitles/refiners/database.py /app/bazarr/bin/bazarr/subtitles/refiners/database.py
 COPY bazarr/subtitles/indexer/series.py bazarr/subtitles/indexer/movies.py bazarr/subtitles/indexer/utils.py /app/bazarr/bin/bazarr/subtitles/indexer/
 COPY bazarr/subtitles/tools/delete.py /app/bazarr/bin/bazarr/subtitles/tools/delete.py

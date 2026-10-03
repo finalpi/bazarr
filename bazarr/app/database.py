@@ -669,7 +669,32 @@ def fix_languages_profiles_with_duplicate_ids():
             )
 
 
-def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None) -> List[dict]:
+def get_subtitle_history(sonarr_episode_ids=None, radarr_ids=None):
+    """Read provenance events in batches, grouped by their media identity."""
+    if sonarr_episode_ids is not None and radarr_ids is not None:
+        raise ValueError('Choose movie or episode subtitle history')
+    if sonarr_episode_ids is not None:
+        table, media_column, ids = TableHistory, TableHistory.sonarrEpisodeId, sonarr_episode_ids
+    else:
+        table, media_column, ids = TableHistoryMovie, TableHistoryMovie.radarrId, radarr_ids or []
+    ids = list(dict.fromkeys(ids))
+    history = {}
+    # Keep bulk detail requests within SQLite's parameter limit.
+    for start in range(0, len(ids), 500):
+        rows = database.execute(
+            select(media_column.label('media_id'), table.id, table.action, table.provider,
+                   table.subtitles_path, table.video_path)
+            .where(media_column.in_(ids[start:start + 500]))
+            .order_by(table.id.desc())
+        ).all()
+        for row in rows:
+            record = dict(row._mapping)
+            history.setdefault(record['media_id'], []).append(record)
+    return history
+
+
+def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None,
+                  subtitle_history=None, video_path=None) -> List[dict]:
     """
     Retrieves a list of subtitles based on the provided episode or movie identifiers.
 
@@ -687,9 +712,13 @@ def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None) -> List[
     :rtype: List[dict]
     """
     from languages.get_languages import alpha3_from_alpha2, language_from_alpha2
+    from subtitles.provenance import resolve_subtitle_source
 
     subtitles = []
+    stored_paths = []
     if sonarr_episode_id:
+        media_id = sonarr_episode_id
+        path_mapper = path_mappings.path_replace
         episodes_subtitles = database.execute(
             select(TableEpisodesSubtitles.path,
                    TableEpisodesSubtitles.language,
@@ -701,6 +730,7 @@ def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None) -> List[
         ).all()
 
         for episode_subtitles in episodes_subtitles:
+            stored_paths.append(episode_subtitles.path)
             unknown = episode_subtitles.language == 'und'
             subtitles.append(
                 {"path": path_mappings.path_replace(episode_subtitles.path),
@@ -713,6 +743,8 @@ def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None) -> List[
                  "embedded_track_id": episode_subtitles.embedded_track_id}
             )
     elif radarr_id:
+        media_id = radarr_id
+        path_mapper = path_mappings.path_replace_movie
         movies_subtitles = database.execute(
             select(TableMoviesSubtitles.path,
                    TableMoviesSubtitles.language,
@@ -724,6 +756,7 @@ def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None) -> List[
         ).all()
 
         for movie_subtitles in movies_subtitles:
+            stored_paths.append(movie_subtitles.path)
             unknown = movie_subtitles.language == 'und'
             subtitles.append(
                 {"path": path_mappings.path_replace_movie(movie_subtitles.path),
@@ -736,4 +769,14 @@ def get_subtitles(sonarr_episode_id: int = None, radarr_id: int = None) -> List[
                  "embedded_track_id": movie_subtitles.embedded_track_id}
             )
 
+    if not subtitles:
+        return []
+    if subtitle_history is None:
+        subtitle_history = get_subtitle_history(
+            sonarr_episode_ids=[sonarr_episode_id] if sonarr_episode_id else None,
+            radarr_ids=[radarr_id] if not sonarr_episode_id else None).get(media_id, [])
+    for subtitle, stored_path in zip(subtitles, stored_paths):
+        subtitle.update(resolve_subtitle_source(
+            dict(subtitle, path=stored_path), subtitle_history, media_id=media_id, video_path=video_path,
+            path_mapper=path_mapper))
     return sorted(subtitles, key=lambda i: (i['name'], i['forced']))

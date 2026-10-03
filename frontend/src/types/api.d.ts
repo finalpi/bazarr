@@ -52,6 +52,15 @@ interface Subtitle {
   hi: boolean;
   path: string | null | undefined; // TODO: FIX ME!!!!!!
   embedded_track_id: number | null | undefined; // TODO: FIX ME!!!!!!
+  source?: string | null;
+  source_type?:
+    | "provider"
+    | "embedded"
+    | "extracted"
+    | "uploaded"
+    | "translated"
+    | "unknown"
+    | null;
 }
 
 interface AudioTrack {

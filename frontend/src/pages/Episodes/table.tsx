@@ -108,7 +108,7 @@ const Table = forwardRef<TableInstance<Item.Episode> | null, Props>(
         }, [episode, seriesId]);
 
         return (
-          <Group gap="xs" wrap="nowrap">
+          <Group gap="xs" wrap="wrap" align="flex-start">
             {elements}
           </Group>
         );

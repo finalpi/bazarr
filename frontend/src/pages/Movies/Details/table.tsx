@@ -7,6 +7,7 @@ import { useMovieSubtitleModification } from "@/apis/hooks";
 import { useShowOnlyDesired } from "@/apis/hooks/site";
 import { Action } from "@/components";
 import Language from "@/components/bazarr/Language";
+import SubtitleSource from "@/components/SubtitleSource";
 import SubtitleToolsMenu from "@/components/SubtitleToolsMenu";
 import SimpleTable from "@/components/tables/SimpleTable";
 import { filterSubtitleBy, toPython } from "@/utilities";
@@ -124,7 +125,7 @@ const Table: FunctionComponent<Props> = ({ movie, profile, disabled }) => {
           },
         }) => {
           const props: TextProps = {
-            className: "table-primary",
+            className: "table-primary table-long-break",
           };
 
           if (isSubtitleTrack(path)) {
@@ -148,12 +149,7 @@ const Table: FunctionComponent<Props> = ({ movie, profile, disabled }) => {
         cell: ({ row }) => {
           const source = isSubtitleMissing(row.original.path)
             ? "MISSING"
-            : row.original.path == null &&
-                row.original.embedded_track_id != null
-              ? "EMBEDDED"
-              : row.original.path?.toLowerCase().includes(".llm.")
-                ? "LLM"
-                : undefined;
+            : undefined;
           if (row.original.path === missingText) {
             return (
               <Badge color="primary">
@@ -176,6 +172,20 @@ const Table: FunctionComponent<Props> = ({ movie, profile, disabled }) => {
             );
           }
         },
+      },
+      {
+        header: () => (
+          <Text size="sm" w={90} style={{ whiteSpace: "normal" }}>
+            Subtitle Source
+          </Text>
+        ),
+        accessorKey: "source",
+        cell: ({ row: { original } }) => (
+          <SubtitleSource
+            subtitle={original}
+            missing={isSubtitleMissing(original.path)}
+          />
+        ),
       },
       {
         id: "code2",

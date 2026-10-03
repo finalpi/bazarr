@@ -2,7 +2,7 @@
 
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
 
-from app.database import TableEpisodes, database, select
+from app.database import TableEpisodes, database, select, get_subtitle_history
 from api.swaggerui import subtitles_model, subtitles_language_model, audio_language_model
 
 from ..utils import authenticate, postprocess
@@ -74,6 +74,7 @@ class Episodes(Resource):
         else:
             return "Series or Episode ID not provided", 404
 
+        subtitle_history = get_subtitle_history(sonarr_episode_ids=[x.sonarrEpisodeId for x in stmt_query])
         return marshal([postprocess({
                 'audio_language': x.audio_language,
                 'episode': x.episode,
@@ -85,4 +86,5 @@ class Episodes(Resource):
                 'sonarrSeriesId': x.sonarrSeriesId,
                 'title': x.title,
                 'sceneName': x.sceneName,
-                }) for x in stmt_query], self.get_response_model, envelope='data')
+                }, subtitle_history=subtitle_history.get(x.sonarrEpisodeId, [])) for x in stmt_query],
+                       self.get_response_model, envelope='data')

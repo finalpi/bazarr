@@ -2,7 +2,7 @@
 
 from flask_restx import Resource, Namespace, reqparse, fields, marshal
 
-from app.database import TableMovies, database, update, select, func
+from app.database import TableMovies, database, update, select, func, get_subtitle_history
 from radarr.sync.movies import update_one_movie
 from subtitles.indexer.movies import list_missing_subtitles_movies, movies_scan_subtitles
 from app.event_handler import event_stream
@@ -87,6 +87,8 @@ class Movies(Resource):
         if length > 0:
             stmt = stmt.limit(length).offset(start)
 
+        rows = database.execute(stmt).all()
+        subtitle_history = get_subtitle_history(radarr_ids=[x.radarrId for x in rows])
         results = [postprocess({
             'alternativeTitles': x.alternativeTitles,
             'audio_language': x.audio_language,
@@ -103,7 +105,7 @@ class Movies(Resource):
             'tags': x.tags,
             'title': x.title,
             'year': x.year,
-        }) for x in database.execute(stmt).all()]
+        }, subtitle_history=subtitle_history.get(x.radarrId, [])) for x in rows]
 
         count = database.execute(
             select(func.count())
