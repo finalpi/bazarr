@@ -33,6 +33,7 @@ from subliminal_patch.chinese import (
 )
 from subliminal_patch.providers import Provider
 from subliminal_patch.subtitle import Subtitle, guess_matches
+from subliminal_patch.subtitle_coverage import subtitle_coverage, _subtitle_text_for_parse
 
 
 logger = logging.getLogger(__name__)
@@ -148,7 +149,7 @@ def _member_script_allowed(name, candidate, subtitle):
     if subtitle.language.alpha3 != 'zho':
         return False
     try:
-        cues = pysubs2.SSAFile.from_string(candidate.text)
+        cues = pysubs2.SSAFile.from_string(_subtitle_text_for_parse(candidate.text))
         text = '\n'.join(cue.plaintext for cue in cues if not cue.is_comment)
     except (ValueError, TypeError, UnicodeError):
         return False
@@ -277,16 +278,115 @@ def _archive_episode_context(name, criteria, previous=None):
     return previous
 
 
+def _safe_member_name(name):
+    value = str(name or '<direct>')
+    value = re.sub(r'https?://\S+', '[URL omitted]', value, flags=re.IGNORECASE)
+    value = re.sub(r'(?i)(?:token|signature|api[_-]?key|password|cookie|authorization)\s*[=:]\s*[^\s&;]+',
+                   '[credential omitted]', value)
+    return re.sub(r'\s+', ' ', value)[:512]
+
+
+def _safe_subtitle_id(subtitle):
+    value = str(getattr(subtitle, 'subtitle_id', '') or '')
+    return value if re.fullmatch(r'[A-Za-z0-9._-]{1,128}', value) else '[ID omitted]'
+
+
+def _log_member(record):
+    # Normal Bazarr logging suppresses the subliminal_patch logger below
+    # CRITICAL. These bounded diagnostics must remain visible with debug off.
+    logging.info('BAZARR SubHD subtitle member: %s', json.dumps(record, ensure_ascii=False))
+
+
+def _remember_failure(selection_info, reason):
+    priorities = {'parse_loss': 4, 'obvious_fragment': 3, 'script_mismatch': 2}
+    previous = selection_info.get('failure_reason')
+    if previous is None or priorities.get(reason, 1) > priorities.get(previous, 1):
+        selection_info['failure_reason'] = reason
+
+
+def _unreadable_member(name, selection_info, error):
+    reason = 'member_read_failed'
+    _remember_failure(selection_info, reason)
+    _log_member({'member': _safe_member_name(name), 'raw_bytes': None, 'encoding': None,
+                 'format': None, 'accepted': False, 'reason': reason,
+                 'exception_type': type(error).__name__, 'total_cues': None, 'dialogue_cues': None,
+                 'first_seconds': None, 'last_seconds': None, 'span_seconds': None,
+                 'span_ratio': None, 'occupied_bins': []})
+
+
+def _evaluate_member(content, name, subtitle, fallback_format=None, display_name=None):
+    subtitle_format = _detect_subtitle_format(content, fallback_format)
+    candidate = copy.copy(subtitle)
+    candidate.content = fix_line_ending(content)
+    candidate.use_original_format = True
+    candidate.format = subtitle_format
+    candidate.encoding = None
+    candidate._is_valid = False
+    candidate._guessed_encoding = None
+    duration = getattr(subtitle.video, 'duration', None)
+    forced = getattr(subtitle.language, 'forced', False) is True
+    partial = getattr(subtitle, 'is_partial', False) is True
+    encoding, valid, script_allowed, error_type = None, False, False, None
+    try:
+        text = candidate.text
+        encoding = candidate.get_encoding()
+        coverage = subtitle_coverage(text, duration, forced=forced, partial=partial)
+        valid = bool(subtitle_format and candidate.is_valid())
+        script_allowed = valid and _member_script_allowed(name, candidate, subtitle)
+    except Exception as error:
+        coverage = subtitle_coverage(None, duration, forced=forced, partial=partial)
+        error_type = type(error).__name__
+    record = dict(coverage, member=_safe_member_name(display_name or name), raw_bytes=len(content),
+                  encoding=encoding, detected_format=subtitle_format)
+    record['format'] = coverage.get('format') or subtitle_format
+    record['coverage_reason'] = coverage['reason']
+    if not valid:
+        record.update(accepted=False, reason='invalid_format')
+    elif not script_allowed:
+        record.update(accepted=False, reason='script_mismatch')
+    if error_type:
+        record['exception_type'] = error_type
+    _log_member(record)
+    return record, subtitle_format
+
+
+def _selection_rank(coverage, filename_score):
+    return (coverage['coverage_class'] == 'full', filename_score or 0)
+
+
 def _extract_download(content, subtitle, _depth=0, _budget=None):
-    extracted, subtitle_format, _ = _extract_download_best(content, subtitle, _depth, _budget)
-    return extracted, subtitle_format
+    started = time.monotonic()
+    selection_info = {}
+    subtitle.selected_archive_member = None
+    extracted, subtitle_format = None, None
+    try:
+        extracted, subtitle_format, _ = _extract_download_best(
+            content, subtitle, _depth, _budget, _selection_info=selection_info)
+        subtitle.download_failure_reason = None if extracted else selection_info.get(
+            'failure_reason', 'no_eligible_subtitle')
+        if extracted:
+            subtitle.selected_archive_member = selection_info.get('member')
+        return extracted, subtitle_format
+    finally:
+        logging.info('BAZARR SubHD subtitle selection: %s', json.dumps({
+            'provider': 'subhd', 'subtitle_id': _safe_subtitle_id(subtitle),
+            'language': str(subtitle.language), 'selected': bool(extracted),
+            'selected_member': selection_info.get('member') if extracted else None,
+            'coverage_class': selection_info.get('coverage_class') if extracted else None,
+            'reason': selection_info.get('reason') if extracted else selection_info.get(
+                'failure_reason', 'no_eligible_subtitle'),
+            'selection_elapsed_seconds': round(time.monotonic() - started, 3),
+        }, ensure_ascii=False))
 
 
-def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_context=None, _fallback_name=None):
+def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_context=None, _fallback_name=None,
+                           _selection_info=None, _archive_path=()):
     if _depth >= _MAX_ARCHIVE_DEPTH:
         return None, None, None
     if _budget is None:
         _budget = [_MAX_EXTRACTED_BYTES]
+    if _selection_info is None:
+        _selection_info = {}
     criteria = dict(
         season=getattr(subtitle.video, 'season', None),
         episode=getattr(subtitle.video, 'episode', None),
@@ -305,24 +405,26 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
                     break
                 try:
                     extracted = reader(selected, min(_MAX_ARCHIVE_MEMBER_BYTES, _budget[0]))
-                except (OSError, ValueError, RuntimeError, BadZipFile, rarfile.Error):
+                except (OSError, ValueError, RuntimeError, BadZipFile, rarfile.Error) as error:
+                    _unreadable_member('/'.join(_archive_path + (selected,)), _selection_info, error)
                     logger.debug('Skipping unreadable SubHD archive member: %s', selected, exc_info=True)
                     continue
                 if len(extracted) > _budget[0]:
                     return best
                 _budget[0] -= len(extracted)
                 extension = os.path.splitext(selected)[1].lstrip('.').lower()
-                subtitle_format = _detect_subtitle_format(extracted, extension)
-                candidate = copy.copy(subtitle)
-                candidate.content = fix_line_ending(extracted)
-                candidate.use_original_format = True
-                candidate.format = subtitle_format
-                candidate._is_valid = False
-                candidate._guessed_encoding = None
-                if candidate.is_valid() and _member_script_allowed(selected, candidate, subtitle):
-                    best = (extracted, subtitle_format, _archive_member_score(selected, criteria, _episode_context))
-                    break
-                logger.debug('Skipping invalid SubHD archive member: %s', selected)
+                record, subtitle_format = _evaluate_member(
+                    extracted, selected, subtitle, extension, '/'.join(_archive_path + (selected,)))
+                if record['accepted']:
+                    rank = _selection_rank(record, _archive_member_score(selected, criteria, _episode_context))
+                    if best[2] is None or rank > best[2]:
+                        best = (extracted, subtitle_format, rank)
+                        _selection_info.update(record)
+                    if record['coverage_class'] in ('full', 'partial', 'unknown'):
+                        break
+                else:
+                    _remember_failure(_selection_info, record['reason'])
+                    logger.debug('Skipping invalid SubHD archive member: %s', _safe_member_name(selected))
             # Some season releases contain one archive per episode instead of
             # subtitle files. Rank their explicit episode markers through the
             # same criteria, then read only matching inner archives.
@@ -340,44 +442,53 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
                 selected = nested[virtual_name]
                 try:
                     inner = reader(selected, min(_MAX_ARCHIVE_MEMBER_BYTES, _budget[0]))
-                except (OSError, ValueError, RuntimeError, BadZipFile, rarfile.Error):
+                except (OSError, ValueError, RuntimeError, BadZipFile, rarfile.Error) as error:
+                    _unreadable_member('/'.join(_archive_path + (selected,)), _selection_info, error)
                     logger.debug('Skipping unreadable nested SubHD archive: %s', selected, exc_info=True)
                     continue
                 if len(inner) > _budget[0]:
                     return best
                 _budget[0] -= len(inner)
+                _log_member({'member': _safe_member_name('/'.join(_archive_path + (selected,))),
+                             'raw_bytes': len(inner), 'encoding': None, 'format': 'archive',
+                             'accepted': True, 'reason': 'nested_archive', 'total_cues': None,
+                             'dialogue_cues': None, 'first_seconds': None, 'last_seconds': None,
+                             'span_seconds': None, 'span_ratio': None, 'occupied_bins': []})
+                inner_selection = {}
                 try:
                     candidate = _extract_download_best(
                         inner, subtitle, _depth + 1, _budget,
-                        _archive_episode_context(selected, criteria, _episode_context), virtual_name)
-                except (OSError, ValueError, RuntimeError, BadZipFile, rarfile.Error):
+                        _archive_episode_context(selected, criteria, _episode_context), virtual_name,
+                        inner_selection, _archive_path + (selected,))
+                except (OSError, ValueError, RuntimeError, BadZipFile, rarfile.Error) as error:
+                    _unreadable_member('/'.join(_archive_path + (selected,)), _selection_info, error)
                     logger.debug('Skipping invalid nested SubHD archive: %s', selected, exc_info=True)
                     continue
                 if candidate[0] and candidate[1] and candidate[2] is not None:
                     if best[2] is None or candidate[2] > best[2]:
                         best = candidate
+                        _selection_info.update(inner_selection)
+                elif inner_selection.get('failure_reason'):
+                    _remember_failure(_selection_info, inner_selection['failure_reason'])
             return best
         finally:
             closer()
 
-    subtitle_format = _detect_subtitle_format(content)
     if _fallback_name is None:
         name = None
     else:
         name = _fallback_name
-    if not subtitle_format:
-        return None, None, None
     if name and not _filename_allowed(name, subtitle):
+        _remember_failure(_selection_info, 'script_mismatch')
         return None, None, None
-    candidate = copy.copy(subtitle)
-    candidate.content = fix_line_ending(content)
-    candidate.use_original_format = True
-    candidate.format = subtitle_format
-    candidate._is_valid = False
-    candidate._guessed_encoding = None
-    if not candidate.is_valid() or not _member_script_allowed(name, candidate, subtitle):
+    display_name = '/'.join(_archive_path) if _archive_path else name
+    record, subtitle_format = _evaluate_member(content, name, subtitle, display_name=display_name)
+    if not record['accepted']:
+        _remember_failure(_selection_info, record['reason'])
         return None, None, None
-    return content, subtitle_format, _archive_member_score(name, criteria, _episode_context) if name else None
+    _selection_info.update(record)
+    score = _archive_member_score(name, criteria, _episode_context) if name else None
+    return content, subtitle_format, _selection_rank(record, score)
 
 
 class SubhdSubtitle(Subtitle):
@@ -613,44 +724,80 @@ class SubhdProvider(Provider):
         return subtitles
 
     def download_subtitle(self, subtitle):
+        started = time.monotonic()
+        subtitle.download_failure_reason = None
+        subtitle.selected_archive_member = None
+        subtitle.encoding = None
+        subtitle._guessed_encoding = None
+        subtitle._is_valid = False
         parsed_page = urlparse(subtitle.page_link)
         host = '%s://%s' % (parsed_page.scheme, parsed_page.netloc)
         subtitle_id = subtitle.subtitle_id
-        last_error = None
-        for _ in range(3):
+        last_error_type, stage = None, 'prepare_download'
+        for attempt in range(1, 4):
             try:
                 with tempfile.TemporaryDirectory(prefix='bazarr-subhd-') as directory:
                     jar = os.path.join(directory, 'cookies.txt')
                     headers = os.path.join(directory, 'headers.txt')
                     detail = host + '/a/' + subtitle_id
+                    stage = 'prepare_download'
                     prepare = json.loads(self._request(
                         host + '/api/sub/prepare-download', method='POST', body={'sid': subtitle_id},
                         cookie_jar=jar, referer=detail, headers_file=headers).decode('utf-8'))
                     if not prepare.get('success'):
                         raise ValueError('SubHD prepare-download failed')
+                    stage = 'download_page'
                     self._request(host + '/down/' + subtitle_id, cookie_jar=jar, referer=detail)
+                    stage = 'download_metadata'
                     result = json.loads(self._request(
                         host + '/api/sub/down', method='POST', body={'sid': subtitle_id},
                         cookie_jar=jar, referer=host + '/down/' + subtitle_id).decode('utf-8'))
                     url = result.get('url') if result.get('success') else None
                     parsed = urlparse(url or '')
+                    stage = 'validate_download_url'
                     if parsed.scheme != 'https' or not parsed.hostname or not any(
                             parsed.hostname == suffix[1:] or parsed.hostname.endswith(suffix)
                             for suffix in _TRUSTED_DOWNLOAD_SUFFIXES):
                         raise ValueError('SubHD returned an untrusted download URL')
+                    stage = 'fetch_package'
                     content = self._request(url, timeout=60)
+                    stage = 'select_member'
                     extracted, subtitle_format = _extract_download(content, subtitle)
                     if not extracted:
-                        logger.warning('SubHD package has no valid subtitle for requested language %s',
-                                       subtitle.language)
+                        subtitle.download_failure_reason = subtitle.download_failure_reason or 'no_eligible_subtitle'
+                        logging.warning('BAZARR SubHD package rejected: %s', json.dumps({
+                            'provider': 'subhd', 'subtitle_id': _safe_subtitle_id(subtitle),
+                            'language': str(subtitle.language), 'stage': stage,
+                            'reason': subtitle.download_failure_reason,
+                            'elapsed_seconds': round(time.monotonic() - started, 3),
+                        }, ensure_ascii=False))
                         subtitle.content = None
                         return
                     subtitle.content = fix_line_ending(extracted)
+                    subtitle.encoding = None
+                    subtitle._guessed_encoding = None
+                    subtitle._is_valid = False
                     if subtitle_format:
                         subtitle.format = subtitle_format
+                    logging.info('BAZARR SubHD package download finished: %s', json.dumps({
+                        'provider': 'subhd', 'subtitle_id': _safe_subtitle_id(subtitle),
+                        'language': str(subtitle.language),
+                        'elapsed_seconds': round(time.monotonic() - started, 3),
+                    }, ensure_ascii=False))
                     return
             except (BadZipFile, OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as error:
-                last_error = error
-                logger.debug('SubHD download attempt failed', exc_info=True)
-        logger.warning('SubHD download failed after retries: %s', last_error)
+                last_error_type = type(error).__name__
+                exit_code = getattr(error, 'returncode', None)
+                logging.warning('BAZARR SubHD download attempt failed: %s', json.dumps({
+                    'provider': 'subhd', 'subtitle_id': _safe_subtitle_id(subtitle),
+                    'stage': stage, 'exception_type': last_error_type,
+                    'exit_code': exit_code if isinstance(exit_code, int) else None,
+                    'attempt': attempt, 'elapsed_seconds': round(time.monotonic() - started, 3),
+                }, ensure_ascii=False))
+        subtitle.download_failure_reason = 'download_failed'
+        logging.warning('BAZARR SubHD download failed after retries: %s', json.dumps({
+            'provider': 'subhd', 'subtitle_id': _safe_subtitle_id(subtitle),
+            'stage': stage, 'exception_type': last_error_type,
+            'elapsed_seconds': round(time.monotonic() - started, 3),
+        }, ensure_ascii=False))
         subtitle.content = None

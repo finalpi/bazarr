@@ -3,6 +3,7 @@
 
 import logging
 import json
+import math
 
 from subliminal import Movie
 from guessit.jsonutils import GuessitEncoder
@@ -11,6 +12,15 @@ from utilities.path_mappings import path_mappings
 from app.database import TableEpisodes, TableMovies, database, select
 from utilities.video_analyzer import parse_video_metadata
 from languages.get_languages import language_from_alpha3
+
+
+def duration_seconds(value):
+    """Knowit exposes durations as timedeltas; keep Video.duration in seconds."""
+    try:
+        seconds = float(value.total_seconds() if hasattr(value, 'total_seconds') else value)
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
 
 
 def refine_from_ffprobe(path, video):
@@ -49,6 +59,16 @@ def refine_from_ffprobe(path, video):
         parser_data = data['mediainfo']
     else:
         parser_data = {}
+
+    duration = duration_seconds(parser_data.get('duration'))
+    if duration is None:
+        for track in parser_data.get('video', []):
+            duration = duration_seconds(track.get('duration'))
+            if duration is not None:
+                break
+    if duration is not None:
+        video.duration = duration
+        logging.debug('BAZARR Media duration from metadata for %s: %.3f seconds', path, duration)
 
     if 'video' not in parser_data:
         logging.debug('BAZARR parser was unable to find video tracks in the file!')

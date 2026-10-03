@@ -18,6 +18,10 @@ from app.config import settings
 bazarr_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 
 
+class JobExecutionError(RuntimeError):
+    """A job reports a known business failure instead of a successful return."""
+
+
 class Job:
     """
     Represents a job with details necessary for its identification and execution.
@@ -579,7 +583,11 @@ class JobsQueue:
             
             job.job_returned_value = getattr(module, job.func)(*job.args, **job.kwargs)
         except Exception as e:
-            logging.exception(f"Exception raised while running function: {e}")
+            if isinstance(e, JobExecutionError):
+                logging.error('Job %s (%s) failed: %s', job.job_name, job.job_id, e)
+                job.progress_message = str(e)
+            else:
+                logging.exception(f"Exception raised while running function: {e}")
             job.status = 'failed'
             job.last_run_time = datetime.now(timezone.utc).isoformat()
             self.jobs_running_queue.remove(job)

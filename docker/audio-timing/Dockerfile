@@ -7,6 +7,7 @@ LABEL org.opencontainers.image.source="https://github.com/finalpi/bazarr" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.description="Bazarr with subtitle timing validation, contextual translation, and styled ASS output"
 COPY bazarr/app/config.py bazarr/app/database.py bazarr/app/get_providers.py /app/bazarr/bin/bazarr/app/
+COPY bazarr/app/jobs_queue.py /app/bazarr/bin/bazarr/app/jobs_queue.py
 COPY bazarr/api/__init__.py /app/bazarr/bin/bazarr/api/__init__.py
 COPY bazarr/api/swaggerui.py bazarr/api/utils.py /app/bazarr/bin/bazarr/api/
 COPY bazarr/api/movies/movies.py /app/bazarr/bin/bazarr/api/movies/movies.py
@@ -20,13 +21,15 @@ COPY bazarr/subtitles/audio_validation.py bazarr/subtitles/download.py bazarr/su
 COPY bazarr/subtitles/audio_reference.py /app/bazarr/bin/bazarr/subtitles/audio_reference.py
 COPY bazarr/subtitles/provenance.py /app/bazarr/bin/bazarr/subtitles/provenance.py
 COPY bazarr/subtitles/refiners/database.py /app/bazarr/bin/bazarr/subtitles/refiners/database.py
+COPY bazarr/subtitles/refiners/ffprobe.py /app/bazarr/bin/bazarr/subtitles/refiners/ffprobe.py
 COPY bazarr/subtitles/indexer/series.py bazarr/subtitles/indexer/movies.py bazarr/subtitles/indexer/utils.py /app/bazarr/bin/bazarr/subtitles/indexer/
 COPY bazarr/subtitles/tools/delete.py /app/bazarr/bin/bazarr/subtitles/tools/delete.py
 COPY bazarr/subtitles/tools/translate/main.py bazarr/subtitles/tools/translate/traditional.py bazarr/subtitles/tools/translate/openai_profiles.py bazarr/subtitles/tools/translate/hi_filter.py /app/bazarr/bin/bazarr/subtitles/tools/translate/
 COPY bazarr/subtitles/tools/translate/services/translator_factory.py bazarr/subtitles/tools/translate/services/openai_translator.py /app/bazarr/bin/bazarr/subtitles/tools/translate/services/
 COPY custom_libs/subliminal_patch/core.py custom_libs/subliminal_patch/core_persistent.py /app/bazarr/bin/custom_libs/subliminal_patch/
 COPY custom_libs/subliminal_patch/chinese.py /app/bazarr/bin/custom_libs/subliminal_patch/chinese.py
+COPY custom_libs/subliminal_patch/subtitle_coverage.py /app/bazarr/bin/custom_libs/subliminal_patch/subtitle_coverage.py
 COPY custom_libs/subliminal_patch/providers/subhd.py custom_libs/subliminal_patch/providers/r3sub.py custom_libs/subliminal_patch/providers/localsibling.py custom_libs/subliminal_patch/providers/subdl.py custom_libs/subliminal_patch/providers/utils.py custom_libs/subliminal_patch/providers/zimuku.py custom_libs/subliminal_patch/providers/assrt.py /app/bazarr/bin/custom_libs/subliminal_patch/providers/
 COPY frontend/build/ /app/bazarr/bin/frontend/build/
 RUN pip install --no-cache-dir opencc-python-reimplemented==0.1.7 && \
-    python3 -m compileall -q /app/bazarr/bin/bazarr/api /app/bazarr/bin/bazarr/jellyfin /app/bazarr/bin/bazarr/subtitles /app/bazarr/bin/custom_libs/subliminal_patch /app/bazarr/bin/bazarr/app/config.py
+    python3 -m compileall -q /app/bazarr/bin/bazarr/api /app/bazarr/bin/bazarr/jellyfin /app/bazarr/bin/bazarr/subtitles /app/bazarr/bin/custom_libs/subliminal_patch /app/bazarr/bin/bazarr/app/config.py /app/bazarr/bin/bazarr/app/jobs_queue.py
