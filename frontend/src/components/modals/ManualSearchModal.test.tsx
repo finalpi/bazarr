@@ -121,4 +121,94 @@ describe("manual subtitle search", () => {
     await user.click(screen.getByRole("button", { name: "Download" }));
     await waitFor(() => expect(download).toHaveBeenCalledWith(item, result));
   });
+
+  it("shows website tags as trimmed, deduplicated badges and preserves the complete download candidate", async () => {
+    const user = userEvent.setup();
+    const tagged: SearchResultType = {
+      ...result,
+      tags: [
+        "其他来源",
+        " 双语 ",
+        "双语",
+        "简体",
+        "繁体",
+        "英语",
+        "ASS",
+        "SRT",
+        "SUP",
+        " ",
+      ],
+    };
+    server.use(
+      http.get("/api/providers/movies", () =>
+        HttpResponse.json({ data: [tagged] }),
+      ),
+    );
+    const { item, download } = renderSearch();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("其他来源");
+    for (const label of ["简体", "繁体", "英语", "ASS", "SRT", "SUP"]) {
+      expect(screen.getByText(label)).toBeVisible();
+    }
+    expect(screen.getAllByText("双语")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Download" }));
+    await waitFor(() => expect(download).toHaveBeenCalledWith(item, tagged));
+  });
+
+  it("keeps tags visible when release information is empty", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/providers/movies", () =>
+        HttpResponse.json({
+          data: [{ ...result, release_info: [], tags: ["双语", "SRT"] }],
+        }),
+      ),
+    );
+    renderSearch();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Cannot get release info");
+    expect(screen.getByText("双语")).toBeVisible();
+    expect(screen.getByText("SRT")).toBeVisible();
+  });
+
+  it("renders tag markup as literal text and keeps release details expandable", async () => {
+    const user = userEvent.setup();
+    const markup = '<img src="tag-xss" onerror="alert(1)">';
+    server.use(
+      http.get("/api/providers/movies", () =>
+        HttpResponse.json({
+          data: [
+            {
+              ...result,
+              release_info: ["Release title", "More release details"],
+              tags: [markup],
+            },
+          ],
+        }),
+      ),
+    );
+    renderSearch();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText(markup);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    await user.click(screen.getByText("Release title"));
+    await waitFor(() =>
+      expect(screen.getByText("More release details")).toBeVisible(),
+    );
+  });
+
+  it("supports null tags on older or other provider results", async () => {
+    const user = userEvent.setup();
+    const legacy: SearchResultType = { ...result, tags: null };
+    server.use(
+      http.get("/api/providers/movies", () =>
+        HttpResponse.json({ data: [legacy] }),
+      ),
+    );
+    const { item, download } = renderSearch();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Maria.Holic.CHS.ass");
+    await user.click(screen.getByRole("button", { name: "Download" }));
+    await waitFor(() => expect(download).toHaveBeenCalledWith(item, legacy));
+  });
 });

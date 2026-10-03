@@ -375,6 +375,7 @@ interface SearchResultType {
   orig_score: number;
   provider: string;
   release_info: string[];
+  tags?: string[] | null;
   score: number;
   score_without_hash: number;
   subtitle: unknown;

@@ -36,6 +36,7 @@ class ProviderEpisodes(Resource):
         'orig_score': fields.Integer(),
         'provider': fields.String(),
         'release_info': fields.List(fields.String),
+        'tags': fields.List(fields.String),
         'score': fields.Integer(),
         'score_without_hash': fields.Integer(),
         'subtitle': fields.String(),

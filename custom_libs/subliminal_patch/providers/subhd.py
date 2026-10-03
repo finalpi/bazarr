@@ -260,6 +260,7 @@ class SubhdSubtitle(Subtitle):
         self.subtitle_id = subtitle_id
         self.release_info = release_info
         self.video = video
+        self.subtitle_tags = []
 
     @property
     def id(self):
@@ -370,6 +371,28 @@ class SubhdProvider(Provider):
         return list(results.items())
 
     @staticmethod
+    def _parse_result_tags(body):
+        """Read the search-card metadata row without treating release text as tags."""
+        results = {}
+        soup = BeautifulSoup(body, 'html.parser')
+        for anchor in soup.find_all('a', href=re.compile(r'(?:^|/)a/[A-Za-z0-9]+$')):
+            match = re.search(r'/a/([A-Za-z0-9]+)$', anchor.get('href', ''))
+            if not match or match.group(1) in results:
+                continue
+            container = anchor.find_parent('div', class_=re.compile(r'\brow\b')) or anchor.parent
+            metadata = container.select_one('div.text-truncate.py-2.f11') if container else None
+            tags = []
+            if metadata:
+                for span in metadata.find_all('span', recursive=False):
+                    if 'p-1' not in (span.get('class') or []) or span.find(['svg', 'i']):
+                        continue
+                    text = re.sub(r'\s+', ' ', span.get_text(' ', strip=True)).strip()
+                    if text and not text.isdecimal() and text not in tags:
+                        tags.append(text)
+            results[match.group(1)] = tags
+        return results
+
+    @staticmethod
     def _search_queries(video):
         titles = search_title_variants(video)[:6]
         queries = []
@@ -433,6 +456,7 @@ class SubhdProvider(Provider):
                         request_failed = True
                         break
                     parsed = self._parse_results(body)
+                    tags_by_id = self._parse_result_tags(body)
                     for subtitle_id, release in parsed[:30]:
                         for language in languages:
                             key = (subtitle_id, str(language))
@@ -440,6 +464,7 @@ class SubhdProvider(Provider):
                                 continue
                             subtitle = self.subtitle_class(
                                 language, subtitle_id, host + '/a/' + subtitle_id, release, video)
+                            subtitle.subtitle_tags = list(tags_by_id.get(subtitle_id, []))
                             matches = subtitle.get_matches(video)
                             if isinstance(video, Episode) and not {'series', 'season', 'episode'} <= matches:
                                 continue

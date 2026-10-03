@@ -146,6 +146,11 @@ def _manual_search_with_pool(path, profile_id, providers, sceneName, title, medi
                 else:
                     s_uploader = None
 
+                tag_values = getattr(s, 'subtitle_tags', []) or []
+                tags = list(dict.fromkeys(tag.strip() for tag in tag_values
+                                          if isinstance(tag, str) and tag.strip())) \
+                    if isinstance(tag_values, list) else []
+
                 if original_format in (1, "1", "True", True):
                     s.use_original_format = True
 
@@ -163,6 +168,7 @@ def _manual_search_with_pool(path, profile_id, providers, sceneName, title, medi
                          matches=list(matches),
                          dont_matches=list(not_matched),
                          release_info=releases,
+                         tags=tags,
                          uploader=s_uploader))
 
             final_subtitles = sorted(subtitles_list, key=lambda x: (x['orig_score'], x['score_without_hash']),

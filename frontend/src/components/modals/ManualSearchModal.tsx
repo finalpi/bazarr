@@ -8,6 +8,7 @@ import {
   Code,
   Collapse,
   Divider,
+  Group,
   MultiSelect,
   Stack,
   Text,
@@ -91,32 +92,63 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
   }, [allProviders, keyword, providers, results.isFetching]);
 
   const ReleaseInfoCell = React.memo(
-    ({ releaseInfo }: { releaseInfo: string[] }) => {
+    ({
+      releaseInfo,
+      tags,
+    }: {
+      releaseInfo: string[];
+      tags?: string[] | null;
+    }) => {
       const [open, setOpen] = useState(false);
 
       const items = useMemo(
         () => releaseInfo.slice(1).map((v, idx) => <Text key={idx}>{v}</Text>),
         [releaseInfo],
       );
-
-      if (releaseInfo.length === 0) {
-        return <Text c="dimmed">Cannot get release info</Text>;
-      }
+      const labels = useMemo(
+        () =>
+          Array.isArray(tags)
+            ? [
+                ...new Set(
+                  tags
+                    .filter((tag) => typeof tag === "string")
+                    .map((tag) => tag.trim())
+                    .filter(Boolean),
+                ),
+              ]
+            : [],
+        [tags],
+      );
 
       return (
-        <Stack gap={0} onClick={() => setOpen((o) => !o)}>
-          <Text className="table-primary" span>
-            {releaseInfo[0]}
-            {releaseInfo.length > 1 && (
-              <FontAwesomeIcon
-                icon={faCaretDown}
-                rotation={open ? 180 : undefined}
-              ></FontAwesomeIcon>
-            )}
-          </Text>
-          <Collapse expanded={open}>
-            <>{items}</>
-          </Collapse>
+        <Stack gap={4}>
+          {releaseInfo.length === 0 ? (
+            <Text c="dimmed">Cannot get release info</Text>
+          ) : (
+            <Stack gap={0} onClick={() => setOpen((o) => !o)}>
+              <Text className="table-primary" span>
+                {releaseInfo[0]}
+                {releaseInfo.length > 1 && (
+                  <FontAwesomeIcon
+                    icon={faCaretDown}
+                    rotation={open ? 180 : undefined}
+                  ></FontAwesomeIcon>
+                )}
+              </Text>
+              <Collapse expanded={open}>
+                <>{items}</>
+              </Collapse>
+            </Stack>
+          )}
+          {labels.length > 0 && (
+            <Group gap={4} wrap="wrap">
+              {labels.map((label) => (
+                <Badge key={label} size="xs" variant="light" color="gray">
+                  {label}
+                </Badge>
+              ))}
+            </Group>
+          )}
         </Stack>
       );
     },
@@ -189,10 +221,10 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
         accessorKey: "release_info",
         cell: ({
           row: {
-            original: { release_info: releaseInfo },
+            original: { release_info: releaseInfo, tags },
           },
         }) => {
-          return <ReleaseInfoCell releaseInfo={releaseInfo} />;
+          return <ReleaseInfoCell releaseInfo={releaseInfo} tags={tags} />;
         },
       },
       {
