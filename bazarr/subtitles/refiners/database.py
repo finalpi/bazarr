@@ -31,6 +31,7 @@ def refine_from_db(path, video):
                    TableEpisodes.audio_codec,
                    TableEpisodes.path,
                    TableShows.imdbId,
+                   TableShows.originalLanguage,
                    TableEpisodes.sonarrSeriesId,
                    TableEpisodes.sonarrEpisodeId,
                    TableEpisodes.absoluteEpisode)
@@ -45,6 +46,7 @@ def refine_from_db(path, video):
             video.episode = int(data.episode)
             video.absolute_episode = int(data.absoluteEpisode) if data.absoluteEpisode else None
             video.title = data.episodeTitle
+            video.original_language = data.originalLanguage
 
             # Only refine year as a fallback
             if not video.year and data.year:
@@ -79,12 +81,14 @@ def refine_from_db(path, video):
                    TableMovies.audio_codec,
                    TableMovies.imdbId,
                    TableMovies.tmdbId,
+                   TableMovies.originalLanguage,
                    TableMovies.radarrId)
             .where(TableMovies.path == path_mappings.path_replace_reverse_movie(path))) \
             .first()
 
         if data:
             video.title = _TITLE_RE.sub('', data.title)
+            video.original_language = data.originalLanguage
 
             # Only refine year as a fallback
             if not video.year and data.year:

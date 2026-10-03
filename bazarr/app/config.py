@@ -98,6 +98,7 @@ validators = [
     Validator('general.single_language', must_exist=True, default=False, is_type_of=bool),
     Validator('general.minimum_score', must_exist=True, default=90, is_type_of=int, gte=0, lte=100),
     Validator('audio_validation.enabled', must_exist=True, default=False, is_type_of=bool),
+    # Retained for old configuration files; timing references are selected per media.
     Validator('audio_validation.audio_stream', must_exist=True, default=0, is_type_of=int, gte=0),
     Validator('general.use_scenename', must_exist=True, default=True, is_type_of=bool),
     Validator('general.use_postprocessing', must_exist=True, default=False, is_type_of=bool),

@@ -33,6 +33,26 @@ def _run(command):
                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)).stdout
 
 
+def select_audio_reference(video, binary):
+    """Select a dialogue reference from the media's original language, not track order."""
+    from .audio_reference import select_original_audio_stream
+
+    probe = json.loads(_run([
+        binary('ffprobe'), '-v', 'error', '-select_streams', 'a', '-show_entries',
+        'stream=index,codec_type:stream_tags=language,title:stream_disposition=default,comment,visual_impaired,dub',
+        '-of', 'json', str(video.original_path)]))
+    try:
+        reference = select_original_audio_stream(
+            probe.get('streams', []), getattr(video, 'original_language', None))
+    except ValueError:
+        logging.warning('BAZARR No original dialogue audio reference for %s (original language: %s)',
+                        video.original_path, getattr(video, 'original_language', None))
+        raise
+    logging.info('BAZARR Original audio reference for %s: %s',
+                 video.original_path, json.dumps(reference))
+    return reference
+
+
 def extract_activity(path, cache_dir, binary, audio_stream=0):
     path = Path(path).resolve(strict=True)
     stat = path.stat()
@@ -265,9 +285,11 @@ def validate_download(video, subtitle):
         subtitle.audio_timing_validated = False
         text = subtitle.text
         intervals = parse_intervals(text)
+        reference = select_audio_reference(video, get_binary)
+        audio_stream = reference['audio_index']
         duration, starts, activity = extract_activity(
             video.original_path, os.path.join(args.config_dir, 'cache', 'audio-validation'),
-            get_binary, settings.audio_validation.audio_stream)
+            get_binary, audio_stream)
         initial_result = evaluate_activity(duration, starts, activity, intervals)
         logging.info('BAZARR Audio timing validation before sync for %s: %s',
                      video.original_path, json.dumps(initial_result))
@@ -282,7 +304,7 @@ def validate_download(video, subtitle):
         for reference_path, reference_intervals, track_id in references:
             try:
                 candidate = align_subtitle(video.original_path, text, get_binary,
-                                           settings.audio_validation.audio_stream, reference_path)
+                                           audio_stream, reference_path)
                 result = evaluate_reference_alignment(
                     duration, starts, reference_intervals, parse_intervals(candidate))
                 logging.info('BAZARR Embedded subtitle timing validation after sync for %s track %s: %s',
@@ -296,7 +318,7 @@ def validate_download(video, subtitle):
             if initial_result['reason'] == 'insufficient_speech':
                 return False
             candidate = align_subtitle(
-                video.original_path, text, get_binary, settings.audio_validation.audio_stream)
+                video.original_path, text, get_binary, audio_stream)
             result = evaluate_activity(duration, starts, activity, parse_intervals(candidate))
             logging.info('BAZARR Audio timing validation after sync for %s: %s',
                          video.original_path, json.dumps(result))
