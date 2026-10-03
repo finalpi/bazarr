@@ -3,6 +3,8 @@
 
 import logging
 import time
+from contextlib import contextmanager
+from tempfile import TemporaryDirectory
 
 from inspect import getfullargspec
 
@@ -14,17 +16,30 @@ from .utils import get_ban_list
 
 
 # fmt: on
-def _init_pool(media_type, profile_id=None, providers=None):
+def _init_pool(media_type, profile_id=None, providers=None, provider_configs=None):
     pool = provider_pool()
     return pool(
-        providers=providers or get_providers(),
-        provider_configs=get_providers_auth(),
+        providers=get_providers() if providers is None else providers,
+        provider_configs=get_providers_auth() if provider_configs is None else provider_configs,
         blacklist=get_blacklist() if media_type == "series" else get_blacklist_movie(),
         throttle_callback=provider_throttle,
         ban_list=get_ban_list(profile_id),
         language_hook=None,
         language_equals=get_language_equals(),
     )
+
+
+@contextmanager
+def _manual_search_pool(media_type, profile_id=None, providers=None):
+    # EmbeddedSubtitlesProvider removes its cache directory on terminate. A
+    # request pool must therefore own a different directory from persistent
+    # automatic/download pools and other concurrent manual searches.
+    with TemporaryDirectory(prefix='bazarr-manual-search-') as cache_dir:
+        provider_configs = get_providers_auth().copy()
+        provider_configs['embeddedsubtitles'] = dict(provider_configs.get('embeddedsubtitles', {}),
+                                                     cache_dir=cache_dir)
+        with _init_pool(media_type, profile_id, providers=providers, provider_configs=provider_configs) as pool:
+            yield pool
 
 
 _pools = {}

@@ -19,7 +19,7 @@ from subliminal import Episode, Movie
 from subliminal.exceptions import AuthenticationError, ConfigurationError, ProviderError
 from subliminal.subtitle import fix_line_ending
 
-from subliminal_patch.chinese import normalize_name, select_archive_entry, title_variants
+from subliminal_patch.chinese import normalize_name, search_title_variants, select_archive_entry, title_variants
 from subliminal_patch.providers import Provider
 from subliminal_patch.subtitle import Subtitle, guess_matches
 
@@ -47,9 +47,10 @@ class R3subSubtitle(Subtitle):
 
     def get_matches(self, video):
         kind = 'episode' if isinstance(video, Episode) else 'movie'
-        matches = guess_matches(video, guessit(self.release_info, {'type': kind}))
+        release = guessit(self.release_info, {'type': kind})
+        matches = guess_matches(video, release)
         normalized = normalize_name(self.release_info)
-        if any(normalize_name(title) in normalized for title in title_variants(video)
+        if any(normalize_name(title) in normalized for title in title_variants(video, include_search_keyword=True)
                if len(normalize_name(title)) >= 3):
             matches.add('series' if isinstance(video, Episode) else 'title')
         if getattr(video, 'year', None) and str(video.year) in self.release_info:
@@ -61,7 +62,8 @@ class R3subSubtitle(Subtitle):
                 desired_language=str(self.language))
             if selected:
                 matches.update(('season', 'episode'))
-        elif isinstance(video, Episode) and 'series' in matches:
+        elif (isinstance(video, Episode) and 'series' in matches and
+              all(field not in release or field in matches for field in ('season', 'episode'))):
             # Search rows represent a show or season. The detail archive is
             # checked for the exact episode before any bytes are accepted.
             matches.update(('season', 'episode'))
@@ -180,7 +182,7 @@ class R3subProvider(Provider):
     def list_subtitles(self, video, languages):
         results = []
         seen = set()
-        for title in title_variants(video)[:6]:
+        for title in search_title_variants(video)[:6]:
             for attempt in range(2):
                 search_url = _BASE + '/search.php?' + urlencode({'s': title, 'type': 'movie'})
                 body = self._curl(search_url, timeout=20).decode('utf-8', 'replace')

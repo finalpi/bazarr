@@ -7,7 +7,7 @@ from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from app.database import TableEpisodes, TableShows, database, select, get_subtitles
 from utilities.path_mappings import path_mappings
 from app.get_providers import get_providers
-from subtitles.manual import manual_search, episode_manually_download_specific_subtitle
+from subtitles.manual import manual_search, episode_manually_download_specific_subtitle, validate_manual_search_options
 from app.config import settings
 from app.jobs_queue import jobs_queue
 from subtitles.indexer.series import store_subtitles, list_missing_subtitles
@@ -21,6 +21,10 @@ api_ns_providers_episodes = Namespace('Providers Episodes', description='List an
 class ProviderEpisodes(Resource):
     get_request_parser = reqparse.RequestParser()
     get_request_parser.add_argument('episodeid', type=int, required=True, help='Episode ID')
+    get_request_parser.add_argument('keyword', type=str, location='args', required=False,
+                                    help='Optional search keyword, up to 200 characters')
+    get_request_parser.add_argument('providers', type=str, action='append', location='args', required=False,
+                                    help='Enabled subtitle providers to search (repeat for multiple providers)')
 
     get_response_model = api_ns_providers_episodes.model('ProviderEpisodesGetResponse', {
         'dont_matches': fields.List(fields.String),
@@ -41,6 +45,7 @@ class ProviderEpisodes(Resource):
 
     @authenticate
     @api_ns_providers_episodes.response(401, 'Not Authenticated')
+    @api_ns_providers_episodes.response(400, 'Invalid search options')
     @api_ns_providers_episodes.response(404, 'Episode not found')
     @api_ns_providers_episodes.response(500, 'Custom error messages')
     @api_ns_providers_episodes.doc(parser=get_request_parser)
@@ -48,6 +53,11 @@ class ProviderEpisodes(Resource):
         """Search manually for an episode subtitles"""
         args = self.get_request_parser.parse_args()
         sonarrEpisodeId = args.get('episodeid')
+        try:
+            keyword, providers_list = validate_manual_search_options(
+                args.get('keyword'), args.get('providers'), get_providers())
+        except ValueError as error:
+            return str(error), 400
         stmt = select(TableEpisodes.path,
                       TableEpisodes.sceneName,
                       TableShows.title,
@@ -81,9 +91,7 @@ class ProviderEpisodes(Resource):
         sceneName = episodeInfo.sceneName or "None"
         profileId = episodeInfo.profileId
 
-        providers_list = get_providers()
-
-        data = manual_search(episodePath, profileId, providers_list, sceneName, title, 'series')
+        data = manual_search(episodePath, profileId, providers_list, sceneName, title, 'series', keyword=keyword)
         if isinstance(data, str):
             return data, 500
         return marshal(data, self.get_response_model, envelope='data')

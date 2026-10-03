@@ -27,18 +27,42 @@ from subtitles.indexer.movies import store_subtitles_movie
 from subtitles.processing import ProcessSubtitlesResult
 
 from bazarr.subtitles.cache import subtitle_cache
-from .pool import update_pools, _get_pool
+from .pool import update_pools, _get_pool, _manual_search_pool
 from .utils import get_video, _get_lang_obj, _get_scores, _set_forced_providers
 from .processing import process_subtitle
 
 
-@update_pools
-def manual_search(path, profile_id, providers, sceneName, title, media_type):
+def validate_manual_search_options(keyword, providers, available_providers):
+    """Validate request-local options without changing configured providers or media metadata."""
+    keyword = (keyword or '').strip()
+    if len(keyword) > 200:
+        raise ValueError('Search keyword must be 200 characters or less')
+    if providers is None:
+        return keyword or None, available_providers
+    if not providers or any(not provider.strip() for provider in providers):
+        raise ValueError('Select at least one subtitle provider')
+    providers = list(dict.fromkeys(provider.strip() for provider in providers))
+    available = set(available_providers or [])
+    if any(provider not in available for provider in providers):
+        raise ValueError('Selected subtitle providers must be enabled and currently available')
+    return keyword or None, providers
+
+
+def manual_search(path, profile_id, providers, sceneName, title, media_type, keyword=None):
     logging.debug(f'BAZARR Manually searching subtitles for this file: {path}')
 
-    final_subtitles = []
+    if not providers:
+        logging.info("BAZARR All providers are throttled")
+        return 'All providers are throttled'
 
-    pool = _get_pool(media_type, profile_id)
+    # Manual source selections must never alter the persistent pools used by
+    # concurrent automatic searches and downloads.
+    with _manual_search_pool(media_type, profile_id, providers=providers) as pool:
+        return _manual_search_with_pool(path, profile_id, providers, sceneName, title, media_type, pool, keyword)
+
+
+def _manual_search_with_pool(path, profile_id, providers, sceneName, title, media_type, pool, keyword=None):
+    final_subtitles = []
 
     language_set, original_format = _get_language_obj(profile_id=profile_id)
     also_forced = any([x.forced for x in language_set])
@@ -48,6 +72,10 @@ def manual_search(path, profile_id, providers, sceneName, title, media_type):
 
     if providers:
         video = get_video(force_unicode(path), title, sceneName, providers=providers, media_type=media_type)
+        if video and keyword:
+            # Refiners have already filled the real media identity; only text
+            # providers opt into this request-local search term.
+            video.search_keyword = keyword
     else:
         logging.info("BAZARR All providers are throttled")
         return 'All providers are throttled'

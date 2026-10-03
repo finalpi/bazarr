@@ -37,7 +37,7 @@ from subliminal_patch.subtitle import (
 from .utils import FIRST_THOUSAND_OR_SO_USER_AGENTS as AGENT_LIST
 from subliminal.video import Episode, Movie
 from subliminal.exceptions import ProviderError
-from subliminal_patch.chinese import select_archive_entry
+from subliminal_patch.chinese import normalize_name, search_title_variants, select_archive_entry
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,9 @@ class ZimukuSubtitle(Subtitle):
         return self.page_link
 
     def get_matches(self, video):
+        keyword = normalize_name(getattr(video, 'search_keyword', None))
+        if len(keyword) >= 3 and keyword in normalize_name(self.version):
+            self.matches.add('series' if isinstance(video, Episode) else 'title')
         if video.year == self.year:
             self.matches.add('year')
 
@@ -231,11 +234,11 @@ class ZimukuProvider(Provider):
 
         return subs
 
-    def query(self, keyword, season=None, episode=None, year=None):
+    def query(self, keyword, season=None, episode=None, year=None, exact_query=False):
         params = keyword
-        if season:
+        if season and not exact_query:
             params += ".S{season:02d}".format(season=season)
-        elif year:
+        elif year and not exact_query:
             params += " {:4d}".format(year)
 
         logger.debug("Searching subtitles %r", params)
@@ -300,12 +303,15 @@ class ZimukuProvider(Provider):
         return subtitles
 
     def list_subtitles(self, video, languages):
-        if isinstance(video, Episode):
+        if getattr(video, 'search_keyword', None):
+            titles = search_title_variants(video)
+        elif isinstance(video, Episode):
             titles = [video.series] + video.alternative_series
         elif isinstance(video, Movie):
             titles = [video.title] + video.alternative_titles
         else:
             titles = []
+        search_options = {'exact_query': True} if getattr(video, 'search_keyword', None) else {}
 
         subtitles = []
         # query for subtitles with the show_id
@@ -318,6 +324,7 @@ class ZimukuProvider(Provider):
                         season=video.season,
                         episode=video.episode,
                         year=video.year,
+                        **search_options,
                     )
                     if s.language in languages
                 ]
@@ -327,7 +334,7 @@ class ZimukuProvider(Provider):
             elif isinstance(video, Movie):
                 found = [
                     s
-                    for s in self.query(title, year=video.year)
+                    for s in self.query(title, year=video.year, **search_options)
                     if s.language in languages
                 ]
                 for subtitle in found:

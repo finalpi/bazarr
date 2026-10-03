@@ -321,6 +321,7 @@ const SeriesEpisodesView: FunctionComponent = () => {
               ref={tableRef}
               episodes={episodes ?? null}
               profile={profile}
+              seriesTitle={series?.title}
               disabled={hasTask || !series || series.profileId === null}
               onAllRowsExpandedChanged={setIsAllRowExpanded}
             ></Table>

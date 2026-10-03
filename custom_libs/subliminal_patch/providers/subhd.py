@@ -24,7 +24,7 @@ from subliminal import Episode, Movie
 from subliminal.exceptions import ConfigurationError
 from subliminal.subtitle import fix_line_ending
 
-from subliminal_patch.chinese import normalize_name, rank_archive_entries, title_variants
+from subliminal_patch.chinese import normalize_name, rank_archive_entries, search_title_variants, title_variants
 from subliminal_patch.providers import Provider
 from subliminal_patch.subtitle import Subtitle, guess_matches
 
@@ -127,7 +127,7 @@ class SubhdSubtitle(Subtitle):
         kind = 'episode' if isinstance(video, Episode) else 'movie'
         matches = guess_matches(video, guessit(self.release_info, {'type': kind}))
         normalized = normalize_name(self.release_info)
-        aliases = title_variants(video)
+        aliases = title_variants(video, include_search_keyword=True)
         if any(normalize_name(alias) in normalized for alias in aliases if len(normalize_name(alias)) >= 3):
             matches.add('series' if isinstance(video, Episode) else 'title')
         if getattr(video, 'year', None) and str(video.year) in self.release_info:
@@ -230,9 +230,9 @@ class SubhdProvider(Provider):
     def list_subtitles(self, video, languages):
         subtitles = []
         seen = set()
-        titles = title_variants(video)[:6]
+        titles = search_title_variants(video)[:6]
         queries = []
-        if isinstance(video, Episode):
+        if isinstance(video, Episode) and not getattr(video, 'search_keyword', None):
             queries.extend('%s S%02dE%02d' % (title, video.season, video.episode) for title in titles)
         queries.extend(titles)
         for query in queries:

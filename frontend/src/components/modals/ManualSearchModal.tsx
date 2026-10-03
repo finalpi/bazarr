@@ -4,11 +4,14 @@ import {
   Anchor,
   Badge,
   Button,
+  Checkbox,
   Code,
   Collapse,
   Divider,
+  MultiSelect,
   Stack,
   Text,
+  TextInput,
 } from "@mantine/core";
 import {
   faCaretDown,
@@ -20,6 +23,8 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { UseQueryResult } from "@tanstack/react-query";
 import { ColumnDef } from "@tanstack/react-table";
 import { isString } from "lodash";
+import { useSystemProviders } from "@/apis/hooks/providers";
+import { ManualSearchOptions } from "@/apis/raw/providers";
 import { Action } from "@/components";
 import Language from "@/components/bazarr/Language";
 import StateIcon from "@/components/StateIcon";
@@ -31,26 +36,59 @@ type SupportType = Item.Movie | Item.Episode;
 
 interface Props<T extends SupportType> {
   download: (item: T, result: SearchResultType) => Promise<void>;
-  query: (id?: number) => UseQueryResult<SearchResultType[] | undefined>;
+  query: (
+    id?: number,
+    options?: ManualSearchOptions,
+    searchId?: number,
+  ) => UseQueryResult<SearchResultType[] | undefined>;
   item: T;
+  defaultKeyword?: string;
 }
 
 function ManualSearchView<T extends SupportType>(props: Props<T>) {
   const { download, query: useSearch, item } = props;
 
-  const [searchStarted, setSearchStarted] = useState(false);
+  const [keyword, setKeyword] = useState("");
+  const defaultKeyword =
+    props.defaultKeyword ?? ("radarrId" in item ? item.title : "");
+  const [providers, setProviders] = useState<string[]>([]);
+  const [allProviders, setAllProviders] = useState(true);
+  const [submitted, setSubmitted] = useState<{
+    options: ManualSearchOptions;
+    id: number;
+  } | null>(null);
+  const providerStatus = useSystemProviders();
+  const providerOptions = useMemo(
+    () =>
+      (providerStatus.data ?? []).map(({ name, status }) => ({
+        value: name,
+        label: status === "Good" ? name : `${name} (${status})`,
+        disabled: status !== "Good",
+      })),
+    [providerStatus.data],
+  );
 
   const itemId = useMemo(() => GetItemId(item), [item]);
 
-  const results = useSearch(searchStarted ? itemId : undefined);
+  const results = useSearch(
+    submitted ? itemId : undefined,
+    submitted?.options,
+    submitted?.id,
+  );
 
-  const haveResult = results.data !== undefined;
+  const haveResult = results.data !== undefined && !results.isError;
 
   const search = useCallback(() => {
-    setSearchStarted(true);
-
-    void results.refetch();
-  }, [results]);
+    if (results.isFetching || (!allProviders && providers.length === 0)) return;
+    setDownloaded({ id: "", state: false });
+    setSubmitted((current) => ({
+      options: {
+        keyword: keyword.trim() || undefined,
+        providers: allProviders ? undefined : [...providers].sort(),
+      },
+      id: (current?.id ?? 0) + 1,
+    }));
+  }, [allProviders, keyword, providers, results.isFetching]);
 
   const ReleaseInfoCell = React.memo(
     ({ releaseInfo }: { releaseInfo: string[] }) => {
@@ -187,7 +225,8 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
         accessorKey: "subtitle",
         cell: ({ row }) => {
           const result = row.original;
-          const isDownloaded = Downloaded.id === row.id && Downloaded.state;
+          const isDownloaded =
+            Downloaded.id === String(result.subtitle) && Downloaded.state;
           return (
             <Action
               label="Download"
@@ -197,8 +236,8 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
               onClick={async () => {
                 if (!item) return;
 
-                setDownloaded({ id: row.id, state: true });
                 await download(item, result);
+                setDownloaded({ id: String(result.subtitle), state: true });
               }}
             ></Action>
           );
@@ -216,8 +255,8 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
       return "Searching";
     }
 
-    return searchStarted ? "Search Again" : "Search";
-  }, [results.isFetching, searchStarted]);
+    return submitted ? "Search Again" : "Search";
+  }, [results.isFetching, submitted]);
 
   return (
     <Stack>
@@ -230,6 +269,50 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
         <Divider hidden={!bSceneNameAvailable} my="xs"></Divider>
         <Code hidden={!bSceneNameAvailable}>{item?.sceneName}</Code>
       </Alert>
+      <TextInput
+        label="Search keyword"
+        description="Use a title or alternative name. Leave blank for automatic matching."
+        placeholder={defaultKeyword || "Movie or series title"}
+        value={keyword}
+        maxLength={200}
+        disabled={results.isFetching}
+        onChange={(event) => setKeyword(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            search();
+          }
+        }}
+      />
+      <Checkbox
+        label="All enabled providers"
+        checked={allProviders}
+        disabled={results.isFetching}
+        onChange={(event) => setAllProviders(event.currentTarget.checked)}
+      />
+      <MultiSelect
+        label="Subtitle providers"
+        description="Select providers for this search. Keywords apply to SubHD, R3Sub, Assrt and Zimuku."
+        placeholder="Choose providers"
+        searchable
+        clearable
+        data={providerOptions}
+        value={providers}
+        disabled={
+          allProviders || providerStatus.isFetching || results.isFetching
+        }
+        onChange={setProviders}
+        error={
+          !allProviders && providers.length === 0
+            ? "Select at least one provider"
+            : undefined
+        }
+      />
+      {results.isError && (
+        <Alert color="red" title="Search failed">
+          {results.error.message}
+        </Alert>
+      )}
       <Collapse expanded={haveResult && !results.isFetching}>
         <PageTable
           autoScroll={false}
@@ -239,7 +322,12 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
         ></PageTable>
       </Collapse>
       <Divider></Divider>
-      <Button loading={results.isFetching} fullWidth onClick={search}>
+      <Button
+        loading={results.isFetching}
+        disabled={!allProviders && providers.length === 0}
+        fullWidth
+        onClick={search}
+      >
         {searchButtonText}
       </Button>
     </Stack>

@@ -7,7 +7,7 @@ from flask_restx import Resource, Namespace, reqparse, fields, marshal
 from app.database import TableMovies, database, select, get_subtitles
 from utilities.path_mappings import path_mappings
 from app.get_providers import get_providers
-from subtitles.manual import manual_search, movie_manually_download_specific_subtitle
+from subtitles.manual import manual_search, movie_manually_download_specific_subtitle, validate_manual_search_options
 from app.config import settings
 from app.jobs_queue import jobs_queue
 from subtitles.indexer.movies import store_subtitles_movie, list_missing_subtitles_movies
@@ -22,6 +22,10 @@ api_ns_providers_movies = Namespace('Providers Movies', description='List and do
 class ProviderMovies(Resource):
     get_request_parser = reqparse.RequestParser()
     get_request_parser.add_argument('radarrid', type=int, required=True, help='Movie ID')
+    get_request_parser.add_argument('keyword', type=str, location='args', required=False,
+                                    help='Optional search keyword, up to 200 characters')
+    get_request_parser.add_argument('providers', type=str, action='append', location='args', required=False,
+                                    help='Enabled subtitle providers to search (repeat for multiple providers)')
 
     get_response_model = api_ns_providers_movies.model('ProviderMoviesGetResponse', {
         'dont_matches': fields.List(fields.String),
@@ -42,6 +46,7 @@ class ProviderMovies(Resource):
 
     @authenticate
     @api_ns_providers_movies.response(401, 'Not Authenticated')
+    @api_ns_providers_movies.response(400, 'Invalid search options')
     @api_ns_providers_movies.response(404, 'Movie not found')
     @api_ns_providers_movies.response(500, 'Custom error messages')
     @api_ns_providers_movies.doc(parser=get_request_parser)
@@ -49,6 +54,11 @@ class ProviderMovies(Resource):
         """Search manually for a movie subtitles"""
         args = self.get_request_parser.parse_args()
         radarrId = args.get('radarrid')
+        try:
+            keyword, providers_list = validate_manual_search_options(
+                args.get('keyword'), args.get('providers'), get_providers())
+        except ValueError as error:
+            return str(error), 400
         stmt = select(TableMovies.title,
                       TableMovies.path,
                       TableMovies.sceneName,
@@ -80,9 +90,7 @@ class ProviderMovies(Resource):
         sceneName = movieInfo.sceneName or "None"
         profileId = movieInfo.profileId
 
-        providers_list = get_providers()
-
-        data = manual_search(moviePath, profileId, providers_list, sceneName, title, 'movie')
+        data = manual_search(moviePath, profileId, providers_list, sceneName, title, 'movie', keyword=keyword)
         if isinstance(data, str):
             return data, 500
         return marshal(data, self.get_response_model, envelope='data')

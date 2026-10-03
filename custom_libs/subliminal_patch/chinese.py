@@ -113,9 +113,10 @@ def rank_archive_entries(names, **criteria):
     return [item[2] for item in sorted(scored, reverse=True)]
 
 
-def title_variants(video):
-    """Return stable, deduplicated title variants already known by Sonarr/Radarr."""
-    values = []
+def title_variants(video, include_search_keyword=False):
+    """Return known titles, optionally including an alias local to this manual search."""
+    keyword = getattr(video, 'search_keyword', None)
+    values = [keyword] if include_search_keyword and isinstance(keyword, str) else []
     is_episode = bool(getattr(video, 'series', None))
     primary_attrs = ('series',) if is_episode else ('title',)
     alternative_attrs = ('alternative_series',) if is_episode else ('alternative_titles',)
@@ -137,3 +138,11 @@ def title_variants(video):
             seen.add(key)
             result.append(value)
     return result
+
+
+def search_title_variants(video):
+    """Use an explicit keyword for searching while keeping known titles for matching."""
+    keyword = getattr(video, 'search_keyword', None)
+    if isinstance(keyword, str) and keyword.strip():
+        return [keyword.strip()]
+    return title_variants(video)

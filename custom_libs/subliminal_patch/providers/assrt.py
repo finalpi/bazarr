@@ -13,6 +13,7 @@ from math import ceil
 from subliminal import Movie, Episode
 from subliminal.exceptions import ConfigurationError, ProviderError
 from subliminal_patch.subtitle import Subtitle, guess_matches
+from subliminal_patch.chinese import normalize_name
 from subliminal.subtitle import fix_line_ending
 from subliminal_patch.providers import Provider
 from subzero.language import Language
@@ -154,6 +155,9 @@ class AssrtSubtitle(Subtitle):
             self._target_season = video.season
             self._target_episode = video.episode
         self.matches = guess_matches(video, guessit(self.video_name))
+        keyword = normalize_name(getattr(video, 'search_keyword', None))
+        if len(keyword) >= 3 and keyword in normalize_name(self.video_name):
+            self.matches.add('series' if isinstance(video, Episode) else 'title')
         # If matching fails for series, retry after stripping leading CJK characters.
         # Assrt often returns video names with Chinese titles prefixed to the English
         # release name (e.g. "瑞克和莫蒂.Rick.and.Morty.S07E10..."), which causes
@@ -228,7 +232,7 @@ class AssrtProvider(Provider):
                 keywords.append('S%02dE%02d' % (video.season, video.episode))
             elif video.episode:
                 keywords.append('E%02d' % video.episode)
-        query = ' '.join(keywords)
+        query = getattr(video, 'search_keyword', None) or ' '.join(keywords)
 
         params = {'token': self.token, 'q': query, 'is_file': 1}
         logger.debug('Searching subtitles: GET /sub/search %r', params)

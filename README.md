@@ -115,7 +115,7 @@ At the request of some users, here is a way to show appreciation for the efforts
 - Series- and movie-based subtitle language configuration.
 - Scan your existing library for internal and external subtitles and download any missing ones.
 - Keep a history of what was downloaded, from where, and when.
-- Manual search to download subtitles on demand.
+- Manual search to download subtitles on demand. The episode **Manual Search** and movie **Manual** dialogs let you choose providers for one search and enter a custom title or alias for SubHD, R3Sub, Assrt, and Zimuku. Keep **All enabled providers** checked and the keyword blank to use automatic matching, then choose a returned candidate to download. Downloads still pass subtitle parsing and audio timing validation.
 - Upgrade previously downloaded subtitles when a better one is found.
 - Delete external subtitles from disk.
 - Support for 184 subtitle languages, including forced/foreign subtitles depending on providers.

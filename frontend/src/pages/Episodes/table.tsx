@@ -24,11 +24,15 @@ interface Props {
   episodes: Item.Episode[] | null;
   disabled?: boolean;
   profile?: Language.Profile;
+  seriesTitle?: string;
   onAllRowsExpandedChanged: (isAllRowsExpanded: boolean) => void;
 }
 
 const Table = forwardRef<TableInstance<Item.Episode> | null, Props>(
-  ({ episodes, profile, disabled, onAllRowsExpandedChanged }, ref) => {
+  (
+    { episodes, profile, seriesTitle, disabled, onAllRowsExpandedChanged },
+    ref,
+  ) => {
     const onlyDesired = useShowOnlyDesired();
 
     const tableRef =
@@ -188,6 +192,7 @@ const Table = forwardRef<TableInstance<Item.Episode> | null, Props>(
                   onClick={() => {
                     modals.openContextModal(EpisodeSearchModal, {
                       item: row.original,
+                      defaultKeyword: seriesTitle,
                       download,
                       query: useEpisodesProvider,
                     });
@@ -215,7 +220,7 @@ const Table = forwardRef<TableInstance<Item.Episode> | null, Props>(
           },
         },
       ],
-      [disabled, download, modals, SubtitlesCell],
+      [disabled, download, modals, seriesTitle, SubtitlesCell],
     );
 
     const maxSeason = useMemo(
