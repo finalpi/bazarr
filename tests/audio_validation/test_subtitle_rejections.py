@@ -26,8 +26,8 @@ from subzero.language import Language
 
 ROOT = Path(__file__).resolve().parents[2]
 INFO_KEYS = {'id', 'reason', 'detail', 'member', 'timestamp'}
-REASONS = ('timing_not_confirmed', 'corrected_timing_not_confirmed',
-           'obvious_fragment', 'parse_loss', 'script_mismatch')
+REASONS = ('timing_mismatch', 'obvious_fragment', 'parse_loss', 'script_mismatch')
+INCONCLUSIVE_REASONS = ('timing_not_confirmed', 'corrected_timing_not_confirmed')
 
 
 def real_model():
@@ -128,6 +128,7 @@ def test_only_demonstrated_mismatch_reasons_are_persisted(db, media_file, reason
     'timeout', 'connection_timeout', 'network_timeout', 'invalid_format', 'invalidformat',
     'cache_expired', 'cacheexpired', 'insufficient_speech', 'insufficientspeech',
     'no_eligible_audio', 'noeligible', 'audio_reference_unavailable', 'validation_timeout',
+    'timing_not_confirmed', 'corrected_timing_not_confirmed', 'validation_unavailable',
     'alignment_failed', 'unknown', None, '',
 ])
 def test_transport_parse_format_cache_and_inconclusive_errors_never_write(db, media_file, reason):
@@ -136,8 +137,85 @@ def test_transport_parse_format_cache_and_inconclusive_errors_never_write(db, me
     assert db.rows() == []
 
 
-def test_recordable_reason_whitelist_is_exactly_the_five_demonstrated_mismatches(db):
+def test_recordable_reason_whitelist_contains_only_confirmed_mismatches(db):
     assert db.module.RECORDABLE_REASONS == frozenset(REASONS)
+
+
+def insert_legacy_rejection(db, media, candidate, reason):
+    """Seed an actual pre-policy row without calling the new record whitelist."""
+    identity = dict(db.module._video_identity(media), **db.module._subtitle_identity(candidate))
+    with db.engine.begin() as connection:
+        return connection.execute(insert(db.model).values(
+            **identity, reason=reason, detail='The sampled audio did not confirm timing',
+            member='Film.CHS&ENG.srt', timestamp=datetime.now(timezone.utc)).returning(db.model.id)).scalar_one()
+
+
+@pytest.mark.parametrize('media_type', ['movie', 'episode'])
+@pytest.mark.parametrize('reason', INCONCLUSIVE_REASONS)
+def test_legacy_inconclusive_rows_remain_auditable_but_never_block_new_validation(
+        db, media_file, media_type, reason, caplog):
+    caplog.set_level(logging.INFO)
+    media, candidate = video(media_file, media_type), subtitle()
+    identifier = insert_legacy_rejection(db, media, candidate, reason)
+    audit_before = db.rows()
+    row, = audit_before
+    legacy_cached_records = {db.module._record_key(row): db.module._info(row)}
+
+    assert db.module.load_rejections(media) == {}
+    assert db.module.get_rejection(media, candidate) is None
+    assert db.module.get_rejection(media, candidate, records=legacy_cached_records) is None
+    assert db.rows() == audit_before
+    assert row['id'] == identifier and row['reason'] == reason
+    assert 'Subtitle rejection skip' not in caplog.text
+
+
+def test_one_search_load_keeps_confirmed_candidates_and_ignores_legacy_inconclusive_ones(db, media_file):
+    media = video(media_file)
+    legacy = subtitle(raw_id='legacy-inconclusive')
+    insert_legacy_rejection(db, media, legacy, 'timing_not_confirmed')
+    confirmed = [subtitle(raw_id=reason) for reason in REASONS]
+    for candidate, reason in zip(confirmed, REASONS):
+        db.module.record_rejection(media, candidate, reason)
+    db.statements.clear()
+
+    records = db.module.load_rejections(media)
+    assert len(db.statements) == 1
+    assert len(records) == len(REASONS)
+    assert db.module.get_rejection(media, legacy, records) is None
+    for candidate, reason in zip(confirmed, REASONS):
+        assert db.module.get_rejection(media, candidate, records)['reason'] == reason
+    assert len(db.statements) == 1
+    assert len(db.rows()) == len(REASONS) + 1
+
+
+@pytest.mark.parametrize('reason', INCONCLUSIVE_REASONS)
+def test_allow_retry_can_clear_one_inactive_legacy_row_without_clearing_other_scopes(db, media_file, reason):
+    media, candidate = video(media_file), subtitle()
+    identifier = insert_legacy_rejection(db, media, candidate, reason)
+    other_language = subtitle(language=Language('zho', 'TW'))
+    other_media = video(media_file, identifier=50)
+    db.module.record_rejection(media, other_language, 'script_mismatch')
+    db.module.record_rejection(other_media, candidate, 'obvious_fragment')
+
+    assert db.module.clear_rejection(media, candidate) is True
+    assert all(row['id'] != identifier for row in db.rows())
+    assert db.module.get_rejection(media, other_language)['reason'] == 'script_mismatch'
+    assert db.module.get_rejection(other_media, candidate)['reason'] == 'obvious_fragment'
+    assert db.module.clear_rejection(media, candidate) is False
+    assert len(db.rows()) == 2
+
+
+@pytest.mark.parametrize('reason', INCONCLUSIVE_REASONS)
+def test_an_inconclusive_retry_neither_overwrites_nor_removes_confirmed_evidence(db, media_file, reason):
+    media, candidate = video(media_file), subtitle()
+    confirmed = db.module.record_rejection(media, candidate, 'parse_loss')
+    before = db.rows()
+    db.statements.clear()
+
+    assert db.module.record_rejection(media, candidate, reason) is None
+    assert db.statements == []
+    assert db.rows() == before
+    assert db.module.get_rejection(media, candidate) == confirmed
 
 
 @pytest.mark.parametrize('media_type', ['movie', 'episode'])
@@ -157,7 +235,7 @@ def test_media_identity_and_physical_file_metadata_are_saved(db, media_file, med
 @pytest.mark.parametrize('changed', ['media_type', 'media_id', 'path', 'size', 'mtime_ns', 'original_language'])
 def test_another_media_or_file_version_never_reuses_old_rejection(db, media_file, tmp_path, changed):
     media, candidate = video(media_file), subtitle()
-    info = db.module.record_rejection(media, candidate, 'timing_not_confirmed')
+    info = db.module.record_rejection(media, candidate, 'timing_mismatch')
     cached = db.module.load_rejections(media)
     if changed == 'media_type':
         other = video(media_file, 'episode')
@@ -243,9 +321,9 @@ def test_same_key_upsert_retains_id_and_updates_evidence(db, media_file):
     media, candidate = video(media_file), subtitle()
     first = db.module.record_rejection(media, candidate, 'parse_loss', {'parse_ratio': 0.03})
     candidate.selected_archive_member = 'FullMovie.CHS.srt'
-    second = db.module.record_rejection(media, candidate, 'timing_not_confirmed', {'score': 0.2})
+    second = db.module.record_rejection(media, candidate, 'timing_mismatch', {'score': 0.2})
     assert second['id'] == first['id']
-    assert second['reason'] == 'timing_not_confirmed'
+    assert second['reason'] == 'timing_mismatch'
     assert second['member'] == 'FullMovie.CHS.srt'
     assert json.loads(second['detail']) == {'score': 0.2}
     assert datetime.fromisoformat(second['timestamp']) >= datetime.fromisoformat(first['timestamp'])

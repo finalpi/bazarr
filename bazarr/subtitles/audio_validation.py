@@ -201,7 +201,7 @@ def _correlations(audio, subtitle_window):
 
 
 def evaluate_activity(duration, starts, activity, intervals, search=False):
-    """Validate actual timing; optional offset/rate search is diagnostic only."""
+    """Measure speech-activity timing; a low score alone is inconclusive."""
     valid = np.array([0.08 < sample.mean() < 0.92 and sample.std() > 0.12 for sample in activity])
     if valid.sum() < 3:
         return {'accepted': False, 'reason': 'insufficient_speech', 'windows': int(valid.sum())}
@@ -290,6 +290,45 @@ def apply_timing_transform(text, rate, offset_seconds):
     return corrected
 
 
+def _reference_verification(video, text, audio_reference, duration, starts, binary, cache_dir,
+                            deadline, progress):
+    """Use independent dialogue/PTS evidence when a VAD score is inconclusive."""
+    from .reference_alignment import verify_dialogue_alignment
+    from .reference_sampling import extract_reference_cues
+
+    # English anchors require enough English dialogue; avoid media reads for
+    # subtitles containing only translated text, logos or short greetings.
+    cues = pysubs2.SSAFile.from_string(text)
+    english_cues = sum(len(re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", cue.plaintext)) >= 4
+                       for cue in cues if not cue.is_comment)
+    if english_cues < 12:
+        return None, {'accepted': False, 'reason': 'reference_inconclusive',
+                      'detail': 'insufficient_original_language_dialogue'}
+    references, metadata = extract_reference_cues(
+        video.original_path, cache_dir, binary, audio_reference, starts, duration,
+        deadline=deadline, progress=progress)
+    if not references:
+        return None, {'accepted': False, 'reason': 'reference_inconclusive',
+                      'detail': metadata.get('reason', 'reference_unavailable')}
+    result = verify_dialogue_alignment(text, references, duration, rates=RATES, max_offset=MAX_OFFSET)
+    result['reference_stream'] = metadata.get('stream_index')
+    logging.info('BAZARR Embedded dialogue timing evidence for %s: %s',
+                 _safe_log_value(video.original_path), json.dumps({k: v for k, v in result.items() if k != 'anchors'}))
+    if not result['accepted']:
+        return None, result
+    if result['rate'] == 1.0 and result['offset_seconds'] == 0:
+        return text, result
+    candidate = apply_timing_transform(text, result['rate'], result['offset_seconds'])
+    # Recheck the actual serialized timestamps; do not commit a proposed fit.
+    verified = verify_dialogue_alignment(candidate, references, duration, rates=(1.0,), max_offset=0)
+    verified['reference_stream'] = metadata.get('stream_index')
+    logging.info('BAZARR Embedded dialogue timing evidence after correction for %s: %s',
+                 _safe_log_value(video.original_path), json.dumps({k: v for k, v in verified.items() if k != 'anchors'}))
+    if not verified['accepted'] or verified['rate'] != 1.0 or verified['offset_seconds'] != 0:
+        return None, dict(verified, accepted=False, reason='reference_inconclusive')
+    return candidate, verified
+
+
 def validate_download(video, subtitle, progress=None):
     from app.config import settings
     if not settings.audio_validation.enabled:
@@ -304,6 +343,7 @@ def validate_download(video, subtitle, progress=None):
                'member': _safe_log_value(getattr(subtitle, 'selected_archive_member', None)),
                'language': _safe_log_value(getattr(subtitle, 'language', ''))}
     subtitle.audio_timing_validated = False
+    subtitle.audio_timing_method = None
     subtitle.audio_timing_failure_reason = None
     subtitle.audio_timing_failure_detail = None
     stage = 'subtitle_coverage'
@@ -364,11 +404,9 @@ def validate_download(video, subtitle, progress=None):
         if initial_result['accepted']:
             _timeout(deadline, VALIDATION_SECONDS)
             subtitle.audio_timing_validated = True
+            subtitle.audio_timing_method = 'original_audio_activity'
             _progress(progress, 'timing_accepted')
             return True
-        if initial_result['reason'] == 'insufficient_speech':
-            return rejected('insufficient_speech')
-
         # Search the existing original-audio windows. No repeated full-film reads,
         # subtitle-track extraction, or long-lived ffsubsync/ffmpeg descendants.
         stage = 'timing_search'
@@ -377,26 +415,49 @@ def validate_download(video, subtitle, progress=None):
         correction = evaluate_activity(duration, starts, activity, intervals, search=True)
         logging.info('BAZARR Sampled original-audio timing search for %s: %s elapsed=%.3fs',
                      video.original_path, json.dumps(correction), time.monotonic() - started)
-        if not correction['accepted']:
-            return rejected('timing_not_confirmed')
-        candidate = apply_timing_transform(text, correction['rate'], correction['offset_seconds'])
-        stage = 'timing_verify'
-        _progress(progress, stage)
+        candidate = None
+        failure_reason = 'timing_not_confirmed'
+        if correction['accepted']:
+            proposed = apply_timing_transform(text, correction['rate'], correction['offset_seconds'])
+            stage = 'timing_verify'
+            _progress(progress, stage)
+            _timeout(deadline, VALIDATION_SECONDS)
+            result = evaluate_activity(duration, starts, activity, parse_intervals(proposed))
+            logging.info('BAZARR Audio timing validation after sampled sync for %s: %s offset_seconds=%.3f rate=%.8f elapsed=%.3fs',
+                         video.original_path, json.dumps(result), correction['offset_seconds'], correction['rate'],
+                         time.monotonic() - started)
+            if result['accepted']:
+                candidate = proposed
+                subtitle.audio_timing_method = 'original_audio_activity'
+            else:
+                failure_reason = 'corrected_timing_not_confirmed'
+        if candidate is None:
+            stage = 'reference_check'
+            _progress(progress, stage)
+            _timeout(deadline, VALIDATION_SECONDS)
+            try:
+                candidate, evidence = _reference_verification(
+                    video, text, reference, duration, starts, get_binary,
+                    os.path.join(args.config_dir, 'cache', 'subtitle-reference'), deadline, progress)
+            except (TimeoutError, subprocess.TimeoutExpired):
+                raise
+            except Exception as error:
+                logging.warning('BAZARR Embedded dialogue evidence unavailable for %s (%s)',
+                                _safe_log_value(video.original_path), type(error).__name__)
+                return rejected(failure_reason, 'Available evidence could not confirm subtitle timing')
+            if candidate is None:
+                logging.info('BAZARR Subtitle timing remains inconclusive for %s: %s',
+                             _safe_log_value(video.original_path), json.dumps(evidence))
+                return rejected(failure_reason, 'Available evidence could not confirm subtitle timing')
+            subtitle.audio_timing_method = 'embedded_original_dialogue'
         _timeout(deadline, VALIDATION_SECONDS)
-        corrected_intervals = parse_intervals(candidate)
-        result = evaluate_activity(duration, starts, activity, corrected_intervals)
-        logging.info('BAZARR Audio timing validation after sampled sync for %s: %s offset_seconds=%.3f rate=%.8f elapsed=%.3fs',
-                     video.original_path, json.dumps(result), correction['offset_seconds'], correction['rate'],
-                     time.monotonic() - started)
-        if not result['accepted']:
-            return rejected('corrected_timing_not_confirmed')
-        _timeout(deadline, VALIDATION_SECONDS)
-        subtitle.content = candidate.encode('utf-8')
-        subtitle.encoding = subtitle._guessed_encoding = 'utf-8'
+        if candidate != text:
+            subtitle.content = candidate.encode('utf-8')
+            subtitle.encoding = subtitle._guessed_encoding = 'utf-8'
         subtitle.audio_timing_validated = True
         _progress(progress, 'timing_accepted')
-        logging.info('BAZARR Timing validation accepted after sampled sync: context=%s elapsed=%.3fs',
-                     json.dumps(context, ensure_ascii=False), time.monotonic() - started)
+        logging.info('BAZARR Timing validation accepted: context=%s method=%s elapsed=%.3fs',
+                     json.dumps(context, ensure_ascii=False), subtitle.audio_timing_method, time.monotonic() - started)
         return True
     except (TimeoutError, subprocess.TimeoutExpired):
         return rejected('validation_timeout', 'Original-audio timing validation exceeded its time limit')

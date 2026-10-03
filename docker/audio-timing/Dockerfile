@@ -19,6 +19,7 @@ COPY bazarr/api/jellyfin/ /app/bazarr/bin/bazarr/api/jellyfin/
 COPY bazarr/jellyfin/ /app/bazarr/bin/bazarr/jellyfin/
 COPY bazarr/subtitles/audio_validation.py bazarr/subtitles/download.py bazarr/subtitles/manual.py bazarr/subtitles/pool.py bazarr/subtitles/processing.py bazarr/subtitles/embedded_translation.py bazarr/subtitles/translation_priority.py bazarr/subtitles/upload.py /app/bazarr/bin/bazarr/subtitles/
 COPY bazarr/subtitles/audio_reference.py /app/bazarr/bin/bazarr/subtitles/audio_reference.py
+COPY bazarr/subtitles/reference_alignment.py bazarr/subtitles/reference_sampling.py /app/bazarr/bin/bazarr/subtitles/
 COPY bazarr/subtitles/provenance.py /app/bazarr/bin/bazarr/subtitles/provenance.py
 COPY bazarr/subtitles/rejections.py /app/bazarr/bin/bazarr/subtitles/rejections.py
 COPY bazarr/subtitles/refiners/database.py /app/bazarr/bin/bazarr/subtitles/refiners/database.py

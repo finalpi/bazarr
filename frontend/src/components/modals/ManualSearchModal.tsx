@@ -56,6 +56,8 @@ function rejectionDescription(rejection: SearchResultType["rejection"]) {
       "The original audio contains too little dialogue to confirm timing.",
     timing_not_confirmed:
       "The subtitle timing does not match the original audio.",
+    timing_mismatch:
+      "Independent timing evidence confirms this subtitle does not match the video.",
     corrected_timing_not_confirmed:
       "The corrected subtitle still does not match the original audio.",
     validation_timeout:

@@ -336,6 +336,8 @@ def stub_runtime(monkeypatch, media, audio_index=10):
     monkeypatch.setitem(sys.modules, 'utilities.binaries', SimpleNamespace(get_binary=str))
     stub_audio_selection(monkeypatch, audio_index)
     monkeypatch.setattr(timing, 'extract_activity', lambda *args, **kwargs: media[:3])
+    monkeypatch.setattr(timing, '_reference_verification', lambda *args, **kwargs:
+                        (None, {'accepted': False, 'reason': 'reference_inconclusive'}))
 
 
 @pytest.mark.parametrize('offset,rate', [(0, 1), (35, 1), (-45, 1), (10, 25 / 24)])
@@ -478,3 +480,33 @@ def test_vtt_notes_do_not_become_audio_timing_cues():
     with_notes = actual.replace('WEBVTT\n\n', 'WEBVTT\n\nNOTE timestamp examples\n'
                                 '00:10:00.000 --> 00:11:00.000\nNot dialogue\n\n')
     np.testing.assert_equal(timing.parse_intervals(with_notes), timing.parse_intervals(actual))
+
+
+def test_inconclusive_vad_can_use_independent_dialogue_evidence_without_retiming(monkeypatch, media):
+    stub_runtime(monkeypatch, media)
+    monkeypatch.setattr(timing, 'evaluate_activity', lambda *args, **kwargs:
+                        {'accepted': False, 'reason': 'timing_not_confirmed'})
+    text = full_srt()
+    reference = []
+    def verify(*args, **kwargs):
+        reference.append(args)
+        return text, {'accepted': True, 'reason': 'reference_dialogue_match', 'anchors': 20}
+    monkeypatch.setattr(timing, '_reference_verification', verify)
+    subtitle = SimpleNamespace(text=text, content=text.encode(), encoding='utf-8')
+    assert timing.validate_download(SimpleNamespace(original_path='video', duration=2400), subtitle)
+    assert subtitle.content == text.encode()
+    assert subtitle.audio_timing_method == 'embedded_original_dialogue'
+    assert reference[0][2]['audio_index'] == 10
+
+
+def test_reference_timeout_is_not_reported_as_a_proven_timing_mismatch(monkeypatch, media):
+    stub_runtime(monkeypatch, media)
+    monkeypatch.setattr(timing, 'evaluate_activity', lambda *args, **kwargs:
+                        {'accepted': False, 'reason': 'timing_not_confirmed'})
+    def timeout(*args, **kwargs):
+        raise TimeoutError()
+    monkeypatch.setattr(timing, '_reference_verification', timeout)
+    subtitle = SimpleNamespace(text=full_srt(), content=b'original')
+    assert not timing.validate_download(SimpleNamespace(original_path='video', duration=2400), subtitle)
+    assert subtitle.audio_timing_failure_reason == 'validation_timeout'
+    assert subtitle.content == b'original'

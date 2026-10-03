@@ -11,7 +11,7 @@ from app.database import TableSubtitleRejections, engine, insert, select, delete
 
 
 RECORDABLE_REASONS = frozenset({
-    'timing_not_confirmed', 'corrected_timing_not_confirmed',
+    'timing_mismatch',
     'obvious_fragment', 'parse_loss', 'script_mismatch',
 })
 _KEY_COLUMNS = ('media_type', 'media_id', 'video_fingerprint', 'provider',
@@ -146,7 +146,7 @@ def _log(action, identity, info):
 
 
 def load_rejections(video):
-    """Read current media-version evidence once for a complete manual search."""
+    """Read active mismatch evidence; retain older inconclusive rows for audit."""
     identity = _video_identity(video)
     if identity is None:
         return {}
@@ -154,7 +154,8 @@ def load_rejections(video):
     with engine.connect() as connection:
         rows = connection.execute(select(table).where(
             table.media_type == identity['media_type'], table.media_id == identity['media_id'],
-            table.video_fingerprint == identity['video_fingerprint'])).mappings().all()
+            table.video_fingerprint == identity['video_fingerprint'],
+            table.reason.in_(RECORDABLE_REASONS))).mappings().all()
     return {_record_key(row): _info(row) for row in rows}
 
 
@@ -167,6 +168,10 @@ def get_rejection(video, subtitle, records=None):
     if records is None:
         records = load_rejections(video)
     info = records.get(_record_key(identity))
+    # Callers may hold records loaded before the reason policy changed. A lack
+    # of timing evidence must never become proof of a persistent mismatch.
+    if info and info.get('reason') not in RECORDABLE_REASONS:
+        return None
     if info:
         _log('skip', identity, info)
     return info

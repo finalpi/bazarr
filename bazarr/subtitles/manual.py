@@ -235,7 +235,8 @@ def _manual_download_progress(job_id, provider, subtitle):
     progress_values = {
         'download_unpack': 10, 'downloaded': 30, 'validation': 40, 'subtitle_coverage': 40,
         'original_audio': 45, 'audio_cache': 50, 'audio_sample': 55, 'timing_check': 75,
-        'timing_search': 80, 'timing_verify': 83, 'timing_accepted': 85,
+        'timing_search': 76, 'timing_verify': 78, 'reference_check': 79,
+        'reference_cache': 80, 'reference_sample': 81, 'timing_accepted': 85,
         'saving': 85, 'postprocessing': 95, 'completed': 100,
     }
     labels = {
@@ -244,6 +245,8 @@ def _manual_download_progress(job_id, provider, subtitle):
         'original_audio': 'Selecting original dialogue audio', 'audio_cache': 'Checking cached original audio activity',
         'audio_sample': 'Sampling original audio', 'timing_check': 'Checking subtitle timing',
         'timing_search': 'Searching subtitle timing offset and frame rate', 'timing_verify': 'Verifying corrected timing',
+        'reference_check': 'Checking dialogue against original-language embedded subtitles',
+        'reference_cache': 'Checking cached dialogue reference', 'reference_sample': 'Sampling embedded dialogue',
         'timing_accepted': 'Subtitle timing confirmed', 'timing_rejected': 'Subtitle timing rejected',
         'saving': 'Saving verified subtitle', 'postprocessing': 'Processing saved subtitle',
         'completed': 'Subtitle saved successfully', 'failed': 'Subtitle download failed',
@@ -278,7 +281,7 @@ def _manual_download_progress(job_id, provider, subtitle):
                 desired = 50 + round(24 * max(0, min(index, total)) / total)
         progress_value = max(progress_value, desired)
         message = labels.get(stage, 'Validating subtitle timing')
-        if stage == 'audio_sample' and detail_values.get('total'):
+        if stage in ('audio_sample', 'reference_sample') and detail_values.get('total'):
             message += ' %s/%s' % (detail_values.get('index', '?'), detail_values['total'])
         if stage in {'failed', 'timing_rejected'}:
             reason = detail_values.get('failure_detail') or detail_values.get('failure_reason') or detail_values.get('reason')
@@ -313,8 +316,9 @@ def _audio_validation_failure(subtitle):
             'invalid_format': 'The downloaded file is not a supported text subtitle',
             'no_dialogue': 'The subtitle contains no usable dialogue cues',
             'insufficient_speech': 'The original-audio samples contain too little dialogue to confirm timing',
-            'timing_not_confirmed': 'The subtitle timing does not match the original dialogue audio',
-            'corrected_timing_not_confirmed': 'The corrected subtitle still does not match the original audio',
+            'timing_not_confirmed': 'Available evidence could not confirm subtitle timing',
+            'corrected_timing_not_confirmed': 'Available evidence could not confirm the corrected subtitle timing',
+            'timing_mismatch': 'Independent reference evidence confirms a subtitle timing mismatch',
             'validation_timeout': 'Original-audio timing validation exceeded its time limit',
             'validation_unavailable': 'Original-audio timing validation is unavailable',
         }

@@ -17,7 +17,7 @@ from subliminal_patch.providers.subhd import SubhdSubtitle
 
 
 ROOT = Path(__file__).resolve().parents[2]
-REJECTION = {'id': 7, 'reason': 'timing_not_confirmed', 'detail': 'Timing does not match original audio',
+REJECTION = {'id': 7, 'reason': 'timing_mismatch', 'detail': 'Timing does not match original audio',
              'member': 'CHS&ENG.srt', 'timestamp': '2026-10-04T00:00:00Z'}
 
 
