@@ -177,7 +177,7 @@ def subtitle():
     return SubhdSubtitle(LANGUAGE, 'sePyJ8', '/a/sePyJ8', TITLE + ' S02 @TLF', video())
 
 
-SRT = b'1\n00:00:01,000 --> 00:00:02,000\ncorrect E05 dialogue\n'
+SRT = '1\n00:00:01,000 --> 00:00:02,000\n这次我们说的话会让他们觉得很好\n'.encode('utf-8')
 
 
 def track_zip_reads(monkeypatch):
@@ -250,7 +250,7 @@ def test_three_archive_levels_work_but_a_fourth_level_is_not_read(monkeypatch):
 def test_nested_archive_uses_the_original_chinese_language_and_format_ranking():
     import pysubs2
     ass = pysubs2.SSAFile()
-    ass.append(pysubs2.SSAEvent(start=1000, end=2000, text='preferred simplified ASS'))
+    ass.append(pysubs2.SSAEvent(start=1000, end=2000, text='这次我们说的话会让他们觉得很好 preferred simplified ASS'))
     ass_bytes = ass.to_string(format_='ass').encode('utf-8')
     inner = zip_bytes({
         'show.S02E05.CHT.ass': ass_bytes.replace(b'preferred simplified ASS', b'wrong traditional ASS'),

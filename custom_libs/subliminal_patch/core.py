@@ -387,7 +387,10 @@ class SZProviderPool(ProviderPool):
                 if not self.ban_list.is_valid(s):
                     continue
 
-                if s.id in seen:
+                # SubHD packages can contain distinct simplified/traditional files
+                # under one site ID. Keep the language variants separately.
+                identity = (s.id, str(s.language)) if provider == 'subhd' else s.id
+                if identity in seen:
                     continue
 
                 s.radarrId = video.radarrId if hasattr(video, 'radarrId') else None
@@ -396,7 +399,7 @@ class SZProviderPool(ProviderPool):
 
                 s.plex_media_fps = float(video.fps) if video.fps else None
                 out.append(s)
-                seen.append(s.id)
+                seen.append(identity)
 
             return out
 

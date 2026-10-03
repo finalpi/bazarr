@@ -13,10 +13,13 @@ import re
 import subprocess
 import tempfile
 import time
+import unicodedata
+from collections import Counter
 from urllib.parse import quote, unquote, urljoin, urlparse
 from zipfile import BadZipFile, ZipFile, is_zipfile
 
 import rarfile
+import pysubs2
 from bs4 import BeautifulSoup
 from guessit import guessit
 from subzero.language import Language
@@ -46,6 +49,119 @@ _MAX_ARCHIVE_DEPTH = 3
 _MAX_ARCHIVE_MEMBER_BYTES = 32 * 1024 * 1024
 _MAX_EXTRACTED_BYTES = 64 * 1024 * 1024
 _MAX_ARCHIVE_CANDIDATES = 20
+_SCRIPT_MARKERS = {
+    'zh': re.compile(r'(?<![a-z0-9])(?:chs|sc|zhs|hans|zh[-_ ]?(?:cn|hans)|gb|simplified)(?![a-z0-9])|'
+                     r'简体|簡體|简中|簡中|简英|簡英|(?<![\u3400-\u9fff])(?:简|簡)(?![\u3400-\u9fff])', re.I),
+    'zt': re.compile(r'(?<![a-z0-9])(?:cht|tc|zht|hant|zh[-_ ]?(?:tw|hant)|big5|traditional)(?![a-z0-9])|'
+                     r'繁体|繁體|繁中|繁英|正体|正體|(?<![\u3400-\u9fff])繁(?![\u3400-\u9fff])', re.I),
+}
+_FOREIGN_TAGS = {
+    '英语', '英語', '英文', '日语', '日語', '日文', '韩语', '韓語', '韩文', '韓文',
+    '法语', '法語', '德语', '德語', '俄语', '俄語', '西班牙语', '西班牙語',
+    '葡萄牙语', '葡萄牙語', '意大利语', '義大利語', '阿拉伯语', '阿拉伯語',
+    '泰语', '泰語', '荷兰语', '荷蘭語', '希伯来语', '希伯來語', '印地语', '印地語',
+    'english', 'japanese', 'korean', 'french', 'german', 'russian', 'spanish',
+    'portuguese', 'italian', 'arabic', 'thai', 'dutch', 'hebrew', 'hindi',
+}
+_CHINESE_TAGS = {'中文', '汉语', '漢語', 'chinese', 'chi', 'zho', 'zh', '中英', '中日', '中韩', '中韓'}
+_BILINGUAL_MARKER = re.compile(r'(?<![a-z0-9])(?:bilingual|dual)(?![a-z0-9])|双语|雙語|中英|中日|中韩|中韓', re.I)
+_FOREIGN_FILENAME = re.compile(
+    r'(?:^|[._ -])(?:eng|en|english|jpn|ja|japanese|kor|ko|korean|fre|fra|fr|ger|deu|de|rus|ru)'
+    r'(?:[._ -](?:hi|sdh|forced))*$', re.I)
+# Only differing character forms contribute evidence; shared Han characters do
+# not establish a script. This intentionally omits ambiguous forms such as 后.
+_SIMPLIFIED_FEATURES = frozenset(
+    '这们说让过还听觉语汉爱给经实应无总进远边动场务员证师纸电气车马龙长万东风飞兴亲欢标转际续虽数级'
+    '话备达带当读断队尔儿够广记讲紧举离连领买卖难请认声头条铁网选样业义阴阳鱼园运乐办变别宾补冲传'
+    '单岛敌顶该个赶归观号获济检将节尽绝军灵刘罗满梦鸟宁齐桥轻区确热萨杀伤设术双岁孙随谈团显写谢'
+    '寻严银优战张赵质众专装资组')
+_TRADITIONAL_FEATURES = frozenset(
+    '這們說讓過還聽覺語漢愛給經實應無總進遠邊動場務員證師紙電氣車馬龍長萬東風飛興親歡標轉際續雖數級'
+    '話備達帶當讀斷隊爾兒夠廣記講緊舉離連領買賣難請認聲頭條鐵網選樣業義陰陽魚園運樂辦變別賓補衝傳'
+    '單島敵頂該個趕歸觀號獲濟檢將節盡絕軍靈劉羅滿夢鳥寧齊橋輕區確熱薩殺傷設術雙歲孫隨談團顯寫謝'
+    '尋嚴銀優戰張趙質眾專裝資組')
+
+
+def _script_markers(value):
+    value = unicodedata.normalize('NFKC', str(value or ''))
+    return {script for script, pattern in _SCRIPT_MARKERS.items() if pattern.search(value)}
+
+
+def _tag_language_evidence(tags):
+    values = [unicodedata.normalize('NFKC', tag).strip().casefold()
+              for tag in tags or [] if isinstance(tag, str) and tag.strip()]
+    scripts = set().union(*(_script_markers(value) for value in values)) if values else set()
+    chinese = bool(scripts or any(value in _CHINESE_TAGS for value in values))
+    bilingual = any(_BILINGUAL_MARKER.search(value) for value in values)
+    foreign_only = any(value in _FOREIGN_TAGS for value in values) and not chinese and not bilingual
+    return scripts, foreign_only
+
+
+def _requested_script(language):
+    return 'zt' if str(getattr(language, 'country', '') or '') in {'TW', 'HK', 'MO'} or \
+        str(getattr(language, 'script', '') or '') == 'Hant' else 'zh'
+
+
+def _available_chinese_languages(tags, languages):
+    scripts, foreign_only = _tag_language_evidence(tags)
+    if foreign_only:
+        return []
+    return [Language.rebuild(language) for language in sorted(
+        (language for language in languages if language.alpha3 == 'zho' and
+         (not scripts or _requested_script(language) in scripts)),
+        key=lambda language: (_requested_script(language) != 'zh', language.basename,
+                              bool(language.forced), bool(language.hi)))]
+
+
+def _filename_allowed(name, subtitle):
+    if os.path.splitext(name)[1].lower() not in _SUBTITLE_EXTENSIONS:
+        return True
+    scripts = _script_markers(os.path.basename(name))
+    if scripts and _requested_script(subtitle.language) not in scripts:
+        return False
+    stem = os.path.splitext(os.path.basename(name))[0]
+    if not scripts and _FOREIGN_FILENAME.search(stem) and not re.search(
+            r'(?<![a-z0-9])(?:chs|cht|chi|zho|zh|zht)[&+._ -](?:eng|en)(?![a-z0-9])', stem, re.I):
+        return False
+    return True
+
+
+def _content_script_evidence(text):
+    counts = Counter(text)
+    han_count = sum(count for character, count in counts.items() if '\u3400' <= character <= '\u9fff')
+    kana_hangul = sum(count for character, count in counts.items()
+                      if '\u3040' <= character <= '\u30ff' or '\uac00' <= character <= '\ud7af')
+    amounts = {script: sum(counts[character] for character in features)
+               for script, features in (('zh', _SIMPLIFIED_FEATURES), ('zt', _TRADITIONAL_FEATURES))}
+    distinct = {script: sum(counts[character] > 0 for character in features)
+                for script, features in (('zh', _SIMPLIFIED_FEATURES), ('zt', _TRADITIONAL_FEATURES))}
+    total = sum(amounts.values())
+    for script in ('zh', 'zt'):
+        if amounts[script] >= 3 and distinct[script] >= 2 and amounts[script] >= total * 0.9:
+            return script, bool(han_count), kana_hangul > han_count + 3
+    mixed = all(amounts[script] >= 3 and distinct[script] >= 2 for script in ('zh', 'zt'))
+    return 'mixed' if mixed else None, bool(han_count), kana_hangul > han_count + 3
+
+
+def _member_script_allowed(name, candidate, subtitle):
+    if subtitle.language.alpha3 != 'zho':
+        return False
+    try:
+        cues = pysubs2.SSAFile.from_string(candidate.text)
+        text = '\n'.join(cue.plaintext for cue in cues if not cue.is_comment)
+    except (ValueError, TypeError, UnicodeError):
+        return False
+    script, has_chinese, other_script = _content_script_evidence(text)
+    if not has_chinese or other_script or script == 'mixed':
+        return False
+    wanted = _requested_script(subtitle.language)
+    named_scripts = _script_markers(os.path.basename(name)) if name else set()
+    if script:
+        return script == wanted and (not named_scripts or script in named_scripts)
+    if named_scripts:
+        return named_scripts == {wanted}
+    page_scripts, foreign_only = _tag_language_evidence(getattr(subtitle, 'subtitle_tags', []))
+    return not foreign_only and page_scripts == {wanted}
 
 
 def _archive_names_and_reader(content):
@@ -174,7 +290,8 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
         try:
             best = (None, None, None)
             ranked = _rank_archive_members(
-                [name for name in names if _matches_archive_episode(name, criteria)], criteria, _episode_context)
+                [name for name in names if _matches_archive_episode(name, criteria) and
+                 _filename_allowed(name, subtitle)], criteria, _episode_context)
             for selected in ranked[:_MAX_ARCHIVE_CANDIDATES]:
                 if _budget[0] <= 0:
                     break
@@ -194,7 +311,7 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
                 candidate.format = subtitle_format
                 candidate._is_valid = False
                 candidate._guessed_encoding = None
-                if candidate.is_valid():
+                if candidate.is_valid() and _member_script_allowed(selected, candidate, subtitle):
                     best = (extracted, subtitle_format, _archive_member_score(selected, criteria, _episode_context))
                     break
                 logger.debug('Skipping invalid SubHD archive member: %s', selected)
@@ -237,9 +354,12 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
 
     subtitle_format = _detect_subtitle_format(content)
     if _fallback_name is None:
-        # Preserve the direct, non-archive download behavior.
-        return content, subtitle_format, None
+        name = None
+    else:
+        name = _fallback_name
     if not subtitle_format:
+        return None, None, None
+    if name and not _filename_allowed(name, subtitle):
         return None, None, None
     candidate = copy.copy(subtitle)
     candidate.content = fix_line_ending(content)
@@ -247,9 +367,9 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
     candidate.format = subtitle_format
     candidate._is_valid = False
     candidate._guessed_encoding = None
-    if not candidate.is_valid():
+    if not candidate.is_valid() or not _member_script_allowed(name, candidate, subtitle):
         return None, None, None
-    return content, subtitle_format, _archive_member_score(_fallback_name, criteria, _episode_context)
+    return content, subtitle_format, _archive_member_score(name, criteria, _episode_context) if name else None
 
 
 class SubhdSubtitle(Subtitle):
@@ -294,7 +414,7 @@ class SubhdSubtitle(Subtitle):
 
 
 class SubhdProvider(Provider):
-    languages = {Language('zho', 'CN'), Language('zho', 'TW')}
+    languages = {Language('zho'), Language('zho', 'CN'), Language('zho', 'TW')}
     video_types = (Episode, Movie)
     subtitle_class = SubhdSubtitle
 
@@ -458,13 +578,14 @@ class SubhdProvider(Provider):
                     parsed = self._parse_results(body)
                     tags_by_id = self._parse_result_tags(body)
                     for subtitle_id, release in parsed[:30]:
-                        for language in languages:
-                            key = (subtitle_id, str(language))
+                        tags = list(tags_by_id.get(subtitle_id, []))
+                        for language in _available_chinese_languages(tags, languages):
+                            key = (subtitle_id, language.basename, bool(language.hi), bool(language.forced))
                             if key in seen:
                                 continue
                             subtitle = self.subtitle_class(
                                 language, subtitle_id, host + '/a/' + subtitle_id, release, video)
-                            subtitle.subtitle_tags = list(tags_by_id.get(subtitle_id, []))
+                            subtitle.subtitle_tags = tags.copy()
                             matches = subtitle.get_matches(video)
                             if isinstance(video, Episode) and not {'series', 'season', 'episode'} <= matches:
                                 continue
@@ -512,7 +633,10 @@ class SubhdProvider(Provider):
                     content = self._request(url, timeout=60)
                     extracted, subtitle_format = _extract_download(content, subtitle)
                     if not extracted:
-                        raise ValueError('SubHD archive has no matching subtitle')
+                        logger.warning('SubHD package has no valid subtitle for requested language %s',
+                                       subtitle.language)
+                        subtitle.content = None
+                        return
                     subtitle.content = fix_line_ending(extracted)
                     if subtitle_format:
                         subtitle.format = subtitle_format

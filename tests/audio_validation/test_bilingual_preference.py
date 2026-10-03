@@ -18,8 +18,9 @@ SIMPLIFIED = Language('zho', 'CN')
 TRADITIONAL = Language('zho', 'TW')
 
 
-def srt(text):
-    return ('1\n00:00:01,000 --> 00:00:02,000\n' + text + '\n').encode('utf-8')
+def srt(text, script='zh'):
+    chinese = '這次我們說的話會讓他們覺得很好' if script == 'zt' else '这次我们说的话会让他们觉得很好'
+    return ('1\n00:00:01,000 --> 00:00:02,000\n' + chinese + '\n' + text + '\n').encode('utf-8')
 
 
 def zip_bytes(files):
@@ -113,9 +114,9 @@ def test_nested_episode_archive_selects_target_script_bilingual_and_never_reads_
         language, winner, monkeypatch):
     inner = zip_bytes({
         'show.S02E05.chs.srt': srt('simplified monolingual'),
-        'show.S02E05.cht.srt': srt('traditional monolingual'),
+        'show.S02E05.cht.srt': srt('traditional monolingual', script='zt'),
         'show.S02E05.chs&eng.srt': srt('simplified bilingual\nEnglish'),
-        'show.S02E05.cht&eng.srt': srt('traditional bilingual\nEnglish'),
+        'show.S02E05.cht&eng.srt': srt('traditional bilingual\nEnglish', script='zt'),
     })
     outer = zip_bytes({
         'show.S02E04.zip': b'wrong episode archive must not be read',
@@ -130,24 +131,26 @@ def test_nested_episode_archive_selects_target_script_bilingual_and_never_reads_
         return original_open(archive, name, *args, **kwargs)
 
     monkeypatch.setattr(ZipFile, 'open', record_read)
-    assert _extract_download(outer, subhd_subtitle(language)) == (srt(winner), 'srt')
+    assert _extract_download(outer, subhd_subtitle(language)) == (
+        srt(winner, script='zt' if language == TRADITIONAL else 'zh'), 'srt')
     assert reads[0] == 'show.S02E05.zip'
     assert len(reads) == 2
     assert 'show.S02E04.zip' not in reads and 'show.S03E12.zip' not in reads
 
 
-@pytest.mark.parametrize('remaining_bilingual,expected', [
-    ('show.S02E05.CHS&ENG.srt', 'valid simplified bilingual\nEnglish'),
-    ('show.S02E05.CHT&ENG.srt', 'valid traditional bilingual\nEnglish'),
-    (None, 'valid monolingual'),
+@pytest.mark.parametrize('remaining_bilingual,bilingual_text,expected', [
+    ('show.S02E05.CHS&ENG.srt', 'valid simplified bilingual\nEnglish', 'valid simplified bilingual\nEnglish'),
+    ('show.S02E05.CHT&ENG.srt', 'valid traditional bilingual\nEnglish', 'valid monolingual'),
+    (None, None, 'valid monolingual'),
 ])
-def test_invalid_preferred_bilingual_falls_back_to_valid_bilingual_then_monolingual(remaining_bilingual, expected):
+def test_invalid_preferred_bilingual_falls_back_within_the_requested_script(
+        remaining_bilingual, bilingual_text, expected):
     files = {
         'show.S02E05.CHS&ENG.ass': b'[Script Info]\n[Events]\nDialogue: malformed\n',
         'show.S02E05.CHS.srt': srt('valid monolingual'),
     }
     if remaining_bilingual:
-        files[remaining_bilingual] = srt(expected)
+        files[remaining_bilingual] = srt(bilingual_text, script='zt' if '.CHT' in remaining_bilingual else 'zh')
     assert _extract_download(zip_bytes(files), subhd_subtitle()) == (srt(expected), 'srt')
 
 
