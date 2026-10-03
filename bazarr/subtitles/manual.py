@@ -410,7 +410,10 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
             return 'Error downloading subtitles (%s)' % type(error).__name__
         else:
             if not subtitle.is_valid():
-                record_rejection(video, subtitle, getattr(subtitle, 'download_failure_reason', None))
+                failure_reason = getattr(subtitle, 'download_failure_reason', None)
+                record_rejection(video, subtitle, failure_reason)
+                if failure_reason == 'script_inconclusive':
+                    return 'Could not confirm the subtitle Chinese script. This result has not been permanently excluded.'
                 logging.error(f"BAZARR Downloaded subtitles isn't valid for this file: {path}")
                 return "Downloaded subtitles isn't valid. Check log."
             if progress:

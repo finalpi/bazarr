@@ -18,8 +18,42 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
 
 jobs:
+  subtitle-validation:
+    name: Verify subtitle matching regressions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install validation dependencies
+        run: python -m pip install -r requirements.txt pytest
+
+      - name: Verify matching, uncertainty and exclusion boundaries
+        env:
+          PYTHONPATH: libs:custom_libs
+        run: >-
+          python -m pytest --confcutdir=tests/audio_validation
+          tests/audio_validation/test_timing.py
+          tests/audio_validation/test_reference_alignment.py
+          tests/audio_validation/test_reference_sampling.py
+          tests/audio_validation/test_subtitle_rejections.py
+          tests/audio_validation/test_rejection_flow.py
+          tests/audio_validation/test_manual_download_jobs.py
+          tests/audio_validation/test_subtitle_coverage.py
+          tests/audio_validation/test_subhd_coverage_selection.py
+          tests/audio_validation/test_subhd_script_guard.py
+          tests/audio_validation/test_false_rejection_regression.py
+          -q
+
   publish:
     name: Publish multi-platform image
+    needs: subtitle-validation
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -35,6 +69,10 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci --ignore-scripts
+
+      - name: Verify manual search rejection messages
+        working-directory: frontend
+        run: npx vitest run src/components/modals/ManualSearchModal.test.tsx
 
       - name: Build frontend
         working-directory: frontend

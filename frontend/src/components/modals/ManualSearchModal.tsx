@@ -39,8 +39,27 @@ import { GetItemId } from "@/utilities";
 
 type SupportType = Item.Movie | Item.Episode;
 
+const unverifiedReasons = new Set([
+  "timing_not_confirmed",
+  "corrected_timing_not_confirmed",
+  "insufficient_speech",
+  "validation_timeout",
+  "validation_unavailable",
+  "reference_inconclusive",
+  "reference_unavailable",
+  "script_inconclusive",
+]);
+
+function isUnverified(rejection: SearchResultType["rejection"]) {
+  return rejection ? unverifiedReasons.has(rejection.reason) : false;
+}
+
 function rejectionDescription(rejection: SearchResultType["rejection"]) {
   if (!rejection) return "This subtitle did not match the video.";
+  if (rejection.reason === "script_inconclusive")
+    return "Could not confirm whether this subtitle is Simplified or Traditional Chinese. You can retry.";
+  if (isUnverified(rejection))
+    return "Available evidence could not confirm subtitle timing. You can retry.";
   if (rejection.detail?.trim()) return rejection.detail.trim();
   /* eslint-disable camelcase -- Persisted backend rejection reason codes. */
   const reasons: Record<string, string> = {
@@ -55,11 +74,11 @@ function rejectionDescription(rejection: SearchResultType["rejection"]) {
     insufficient_speech:
       "The original audio contains too little dialogue to confirm timing.",
     timing_not_confirmed:
-      "The subtitle timing does not match the original audio.",
+      "Available evidence could not confirm subtitle timing.",
     timing_mismatch:
       "Independent timing evidence confirms this subtitle does not match the video.",
     corrected_timing_not_confirmed:
-      "The corrected subtitle still does not match the original audio.",
+      "Available evidence could not confirm the corrected subtitle timing.",
     validation_timeout:
       "Original-audio timing validation exceeded its time limit.",
     validation_unavailable: "Original-audio timing validation is unavailable.",
@@ -194,10 +213,18 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
           )}
           {rejected && (
             <Stack gap={2}>
-              <Badge size="xs" variant="light" color="red">
-                Not matched
+              <Badge
+                size="xs"
+                variant="light"
+                color={isUnverified(rejection) ? "yellow" : "red"}
+              >
+                {isUnverified(rejection) ? "Not verified" : "Not matched"}
               </Badge>
-              <Text size="xs" c="red" title={rejectionDescription(rejection)}>
+              <Text
+                size="xs"
+                c={isUnverified(rejection) ? "dimmed" : "red"}
+                title={rejectionDescription(rejection)}
+              >
                 {rejectionDescription(rejection)}
               </Text>
             </Stack>
@@ -315,6 +342,8 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
         accessorKey: "subtitle",
         cell: ({ row }) => {
           const result = row.original;
+          const blocked =
+            result.rejected === true && !isUnverified(result.rejection);
           const subtitleId = String(result.subtitle);
           const isQueued = queuedSubtitle === subtitleId;
           return (
@@ -323,9 +352,9 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
                 label={isQueued ? "Queued" : "Download"}
                 icon={isQueued ? faClock : faDownload}
                 color="gray"
-                disabled={item === null || result.rejected === true || isQueued}
+                disabled={item === null || blocked || isQueued}
                 onClick={async () => {
-                  if (!item || result.rejected === true) return;
+                  if (!item || blocked) return;
                   setActionError(null);
                   try {
                     // HTTP 204 confirms queue submission, not a saved subtitle.
@@ -340,7 +369,7 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
                   }
                 }}
               />
-              {result.rejected && (
+              {blocked && (
                 <Action
                   label="Allow retry"
                   icon={faRotateLeft}

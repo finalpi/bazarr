@@ -15,6 +15,8 @@ OUTPUT_KEYS = {
     'accepted', 'reason', 'rate', 'offset_seconds', 'correction_required', 'anchor_count',
     'window_counts', 'window_count', 'span_ratio', 'inlier_ratio', 'residual_median_seconds',
     'residual_p90_seconds', 'end_residual_p90_seconds', 'anchors',
+    'candidate_available_cues', 'reference_available_cues', 'candidate_matched_cues',
+    'reference_matched_cues', 'candidate_coverage_ratio', 'reference_coverage_ratio',
 }
 DURATION = 3600
 SENTENCES = (
@@ -102,6 +104,8 @@ def assert_accepted(result, reason='reference_match', rate=1.0, offset=0.0, corr
     assert result['span_ratio'] >= 0.5
     assert result['inlier_ratio'] >= 0.85
     assert result['residual_p90_seconds'] <= 1.5
+    assert result['candidate_coverage_ratio'] >= 0.5
+    assert result['reference_coverage_ratio'] >= 0.5
 
 
 def assert_inconclusive(result):
@@ -191,6 +195,8 @@ def test_same_sentence_at_same_time_is_deduplicated_without_losing_real_anchors(
     assert_accepted(result)
     assert result['anchor_count'] == 12
     assert len(result['anchors']) == 12
+    assert result['candidate_available_cues'] == result['reference_available_cues'] == 12
+    assert result['candidate_matched_cues'] == result['reference_matched_cues'] == 12
 
 
 def test_repeated_sentence_at_different_times_is_not_counted_as_many_anchors(verify):
@@ -239,6 +245,75 @@ def test_adjacent_split_or_merged_dialogue_uses_each_source_cue_only_once(verify
     assert result['anchor_count'] == 25
     assert len({anchor['candidate_start'] for anchor in result['anchors']}) == 25
     assert len({anchor['reference_start'] for anchor in result['anchors']}) == 25
+    assert result['candidate_available_cues'] == (50 if split_candidate else 25)
+    assert result['reference_available_cues'] == (25 if split_candidate else 50)
+    assert result['candidate_coverage_ratio'] == result['reference_coverage_ratio'] == 1
+
+
+def dense_partial_match():
+    refs, candidates, common = [], [], []
+    for window, start in enumerate((360, 1800, 3240)):
+        for index in range(4):
+            cue = {'start': start + index * 15, 'end': start + index * 15 + 0.6,
+                   'text': SENTENCES[window * 4 + index], 'window': window}
+            refs.append(cue)
+            candidates.append(dict(cue))
+            common.append(dict(cue))
+        for index in range(60):
+            cue = {'start': start + 0.8 + index * 0.73, 'end': start + 1.3 + index * 0.73,
+                   'text': f'Reference cobalt lanterns spin above hazelnut towers number {window * 60 + index}.',
+                   'window': window}
+            refs.append(cue)
+            candidates.append(dict(cue, text=f'Candidate purple mushrooms grow beneath copper oceans marker {window * 60 + index}.'))
+    return refs, candidates, common
+
+
+def test_twelve_shared_lines_among_192_sampled_cues_cannot_prove_a_match(verify):
+    refs, candidates, _ = dense_partial_match()
+    result = verify(candidate(candidates), refs, DURATION)
+    assert_inconclusive(result)
+    assert result['anchor_count'] == 12 and result['window_count'] == 3
+    assert result['candidate_available_cues'] == result['reference_available_cues'] == 192
+    assert result['candidate_matched_cues'] == result['reference_matched_cues'] == 12
+    assert result['candidate_coverage_ratio'] == result['reference_coverage_ratio'] == pytest.approx(12 / 192)
+
+
+@pytest.mark.parametrize('unmatched_side', ['reference', 'candidate'])
+def test_both_sides_require_substantial_sampled_dialogue_coverage(verify, unmatched_side):
+    refs, candidates, common = dense_partial_match()
+    result = verify(candidate(common if unmatched_side == 'reference' else candidates),
+                    refs if unmatched_side == 'reference' else common, DURATION)
+    assert_inconclusive(result)
+    low = result[f'{unmatched_side}_coverage_ratio']
+    other = result['candidate_coverage_ratio' if unmatched_side == 'reference' else 'reference_coverage_ratio']
+    assert low == pytest.approx(12 / 192)
+    assert other == 1
+
+
+@pytest.mark.parametrize('rate,offset', [(1, 35), (25 / 24, -15)])
+def test_low_coverage_also_rejects_an_otherwise_consistent_fitted_transform(verify, rate, offset):
+    refs, candidates, _ = dense_partial_match()
+    assert_inconclusive(verify(candidate(candidates, rate=rate, offset=offset), refs, DURATION))
+
+
+def test_unsampled_candidate_dialogue_does_not_reduce_sampled_match_coverage(verify):
+    refs = reference()
+    extra = [{'start': 30 + index, 'end': 30 + index + 0.5,
+              'text': f'Unsampled violet spheres tumble beneath quiet glaciers sequence {index}.'}
+             for index in range(200)]
+    result = verify(candidate(refs + extra), refs, DURATION)
+    assert_accepted(result)
+    assert result['candidate_available_cues'] == result['candidate_matched_cues'] == 25
+
+
+def test_candidate_sample_range_is_evaluated_after_applying_the_proposed_offset(verify):
+    refs = reference()
+    aligned = [dict(cue, start=cue['start'] - 35, end=cue['end'] - 35) for cue in refs]
+    outside_after_transform = [dict(cue, text=f'Unrelated violet planets drift near silver arches sequence {index}.')
+                               for index, cue in enumerate(refs)]
+    result = verify(candidate(aligned + outside_after_transform), refs, DURATION)
+    assert_accepted(result, reason='reference_correction', offset=35, correction=True)
+    assert result['candidate_available_cues'] == result['candidate_matched_cues'] == 25
 
 
 def test_split_reference_cues_cannot_reuse_nine_candidate_cues_to_meet_twelve_anchor_threshold(verify):

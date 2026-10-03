@@ -6,6 +6,7 @@ import pytest
 from subliminal import Episode
 from subzero.language import Language
 
+from subliminal_patch.providers import subhd as subhd_module
 from subliminal_patch.providers.subhd import SubhdProvider, SubhdSubtitle, _extract_download
 
 
@@ -202,3 +203,124 @@ def test_direct_chinese_utf8_format_probe_can_end_inside_a_multibyte_character()
 def test_direct_legacy_chinese_encoding_still_detects_srt_before_script_validation(language, text, encoding):
     payload = srt(text).decode('utf-8').encode(encoding)
     assert _extract_download(payload, subtitle(language)) == (payload, 'srt')
+
+
+@pytest.mark.parametrize('language,tags,text,filename,expected', [
+    (CN, [], '你好 人生和平', 'show.S02E05.srt', 'script_inconclusive'),
+    (TW, [], '你好 人生和平', 'show.S02E05.srt', 'script_inconclusive'),
+    (CN, ['简体', '繁体'], '你好 人生和平', 'show.S02E05.srt', 'script_inconclusive'),
+    (TW, ['简体', '繁体'], '你好 人生和平', 'show.S02E05.srt', 'script_inconclusive'),
+    (CN, ['双语', '英语'], '你好 人生和平', 'show.S02E05.srt', 'script_inconclusive'),
+    (CN, ['英语'], '你好 人生和平', 'show.S02E05.srt', 'script_inconclusive'),
+    (CN, ['简体'], SIMPLIFIED + '\n' + TRADITIONAL, 'show.S02E05.CHS.srt', 'script_inconclusive'),
+    (TW, ['繁体'], SIMPLIFIED + '\n' + TRADITIONAL, 'show.S02E05.CHT.srt', 'script_inconclusive'),
+    (CN, [], TRADITIONAL, 'show.S02E05.srt', 'script_mismatch'),
+    (TW, [], SIMPLIFIED, 'show.S02E05.srt', 'script_mismatch'),
+    (CN, ['简体'], TRADITIONAL, 'show.S02E05.CHS.srt', 'script_mismatch'),
+    (TW, ['繁体'], SIMPLIFIED, 'show.S02E05.CHT.srt', 'script_mismatch'),
+    (CN, ['简体', '繁体'], 'A clearly English subtitle without Chinese dialogue.',
+     'show.S02E05.srt', 'script_mismatch'),
+    (TW, [], 'これは日本語の字幕です みんなここに来てください',
+     'show.S02E05.srt', 'script_mismatch'),
+    (CN, [], SIMPLIFIED, 'show.S02E05.srt', 'script_match'),
+    (TW, [], TRADITIONAL, 'show.S02E05.srt', 'script_match'),
+    (CN, ['简体'], '你好 人生和平', 'show.S02E05.srt', 'script_match'),
+    (TW, ['繁体'], '你好 人生和平', 'show.S02E05.srt', 'script_match'),
+])
+def test_actual_member_script_verdict_distinguishes_uncertainty_from_proven_conflict(
+        language, tags, text, filename, expected):
+    target = subtitle(language, tags)
+    candidate = subtitle(language, tags)
+    candidate.content = srt(text)
+    candidate.use_original_format = True
+    candidate.format = 'srt'
+    result = subhd_module._member_script_verdict(filename, candidate, target)
+    assert result == {'accepted': expected == 'script_match', 'reason': expected}
+    assert subhd_module._member_script_allowed(filename, candidate, target) is (expected == 'script_match')
+
+
+@pytest.mark.parametrize('language,tags,text', [
+    (CN, [], '你好 人生和平'),
+    (TW, ['简体', '繁体'], '你好 人生和平'),
+    (CN, [], SIMPLIFIED + '\n' + TRADITIONAL),
+    (TW, [], SIMPLIFIED + '\n' + TRADITIONAL),
+])
+@pytest.mark.parametrize('packaged', [False, True])
+def test_an_unknown_valid_member_sets_nonpersistent_inconclusive_failure_reason(language, tags, text, packaged):
+    target = subtitle(language, tags)
+    payload = srt(text)
+    if packaged:
+        payload = archive({'show.S02E05.srt': payload})
+    assert _extract_download(payload, target) == (None, None)
+    assert target.download_failure_reason == 'script_inconclusive'
+    assert target.selected_archive_member is None
+
+
+@pytest.mark.parametrize('language,opposite', [(CN, TRADITIONAL), (TW, SIMPLIFIED)])
+@pytest.mark.parametrize('unknown_first', [True, False])
+@pytest.mark.parametrize('layout', ['flat', 'inner', 'two_inner', 'unknown_inner', 'opposite_inner'])
+def test_any_valid_unknown_member_prevents_permanent_script_mismatch_for_the_package(
+        language, opposite, unknown_first, layout):
+    unknown_name, opposite_name = 'show.S02E05.A.srt', 'show.S02E05.B.srt'
+    entries = [(unknown_name, srt('你好 人生和平')), (opposite_name, srt(opposite))]
+    if not unknown_first:
+        entries.reverse()
+    if layout == 'flat':
+        payload = archive(dict(entries))
+    elif layout == 'inner':
+        payload = archive({'show.S02E05.zip': archive(dict(entries))})
+    elif layout == 'two_inner':
+        payload = archive({name.replace('.srt', '.zip'): archive({name: content}) for name, content in entries})
+    else:
+        nested_name = unknown_name if layout == 'unknown_inner' else opposite_name
+        payload = archive({name.replace('.srt', '.zip') if name == nested_name else name:
+                           archive({name: content}) if name == nested_name else content
+                           for name, content in entries})
+    target = subtitle(language, ['简体', '繁体'])
+    assert _extract_download(payload, target) == (None, None)
+    assert target.download_failure_reason == 'script_inconclusive'
+    assert target.selected_archive_member is None
+
+
+@pytest.mark.parametrize('language,opposite', [(CN, TRADITIONAL), (TW, SIMPLIFIED)])
+@pytest.mark.parametrize('nested', [False, True])
+def test_only_proven_opposite_script_members_still_report_mismatch(language, opposite, nested):
+    payload = archive({'show.S02E05.A.srt': srt(opposite), 'show.S02E05.B.srt': srt(opposite)})
+    if nested:
+        payload = archive({'show.S02E05.zip': payload})
+    target = subtitle(language)
+    assert _extract_download(payload, target) == (None, None)
+    assert target.download_failure_reason == 'script_mismatch'
+
+
+@pytest.mark.parametrize('language,matching,opposite', [(CN, SIMPLIFIED, TRADITIONAL),
+                                                     (TW, TRADITIONAL, SIMPLIFIED)])
+def test_successful_matching_member_clears_previous_failure_even_after_uncertain_or_opposite_members(
+        language, matching, opposite):
+    target = subtitle(language, ['简体', '繁体'])
+    target.download_failure_reason = 'script_mismatch'
+    payload = archive({'show.S02E05.A.srt': srt('你好 人生和平'),
+                       'show.S02E05.B.srt': srt(opposite),
+                       'show.S02E05.C.srt': srt(matching)})
+    assert _extract_download(payload, target) == (srt(matching), 'srt')
+    assert target.download_failure_reason is None
+    assert target.selected_archive_member == 'show.S02E05.C.srt'
+
+
+@pytest.mark.parametrize('failure', ['obvious_fragment', 'parse_loss'])
+@pytest.mark.parametrize('nested', [False, True])
+def test_valid_unknown_script_member_prevents_other_member_coverage_failures_from_sealing_package(
+        failure, nested):
+    from test_subtitle_coverage import lossy_srt, srt as complete_srt
+
+    unknown = complete_srt(count=100, span=3500, text='你好 人生和平').encode('utf-8')
+    rejected = (complete_srt(count=63, span=272, text=SIMPLIFIED) if failure == 'obvious_fragment'
+                else lossy_srt(parsed_count=7, declared_count=10, span=3500, text=SIMPLIFIED)).encode('utf-8')
+    payload = archive({'show.S02E05.A.srt': rejected, 'show.S02E05.B.srt': unknown})
+    if nested:
+        payload = archive({'show.S02E05.zip': payload})
+    target = subtitle(CN, ['简体', '繁体'])
+    target.video.duration = 3600
+    assert _extract_download(payload, target) == (None, None)
+    assert target.download_failure_reason == 'script_inconclusive'
+    assert target.selected_archive_member is None

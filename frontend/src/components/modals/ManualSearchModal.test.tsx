@@ -84,6 +84,50 @@ function renderSearch(
 }
 
 describe("manual subtitle search", () => {
+  it.each([
+    "timing_not_confirmed",
+    "corrected_timing_not_confirmed",
+    "validation_timeout",
+    "reference_unavailable",
+    "script_inconclusive",
+  ])(
+    "does not turn stale %s evidence into a permanent mismatch",
+    async (reason) => {
+      const user = userEvent.setup();
+      server.use(
+        http.get("/api/providers/movies", () =>
+          HttpResponse.json({
+            data: [
+              {
+                ...result,
+                rejected: true,
+                rejection: {
+                  id: 8,
+                  reason,
+                  detail: "Old incorrect mismatch wording",
+                },
+              },
+            ],
+          }),
+        ),
+      );
+      const { download } = renderSearch();
+      await user.click(screen.getByRole("button", { name: "Search" }));
+      await screen.findByText("Not verified");
+      expect(screen.queryByText("Not matched")).not.toBeInTheDocument();
+      expect(
+        screen.queryByText("Old incorrect mismatch wording"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Allow retry" }),
+      ).not.toBeInTheDocument();
+      const button = screen.getByRole("button", { name: "Download" });
+      expect(button).toBeEnabled();
+      await user.click(button);
+      expect(download).toHaveBeenCalledOnce();
+    },
+  );
+
   it("submits only on Search, uses the chosen provider and can repeat the same search", async () => {
     const user = userEvent.setup();
     const requests: URLSearchParams[] = [];
@@ -290,7 +334,7 @@ describe("manual subtitle search", () => {
                 rejection: rejected
                   ? {
                       id: 31,
-                      reason: "timing_not_confirmed",
+                      reason: "timing_mismatch",
                       detail: "Audio timing did not match this video.",
                     }
                   : null,
@@ -357,7 +401,7 @@ describe("manual subtitle search", () => {
             {
               ...result,
               rejected: true,
-              rejection: { id: 1, reason: "timing_not_confirmed" },
+              rejection: { id: 1, reason: "timing_mismatch" },
             },
           ],
         }),

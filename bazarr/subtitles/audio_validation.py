@@ -309,7 +309,7 @@ def _reference_verification(video, text, audio_reference, duration, starts, bina
         deadline=deadline, progress=progress)
     if not references:
         return None, {'accepted': False, 'reason': 'reference_inconclusive',
-                      'detail': metadata.get('reason', 'reference_unavailable')}
+                      'detail': metadata.get('detail') or metadata.get('reason', 'reference_unavailable')}
     result = verify_dialogue_alignment(text, references, duration, rates=RATES, max_offset=MAX_OFFSET)
     result['reference_stream'] = metadata.get('stream_index')
     logging.info('BAZARR Embedded dialogue timing evidence for %s: %s',
@@ -431,25 +431,33 @@ def validate_download(video, subtitle, progress=None):
                 subtitle.audio_timing_method = 'original_audio_activity'
             else:
                 failure_reason = 'corrected_timing_not_confirmed'
-        if candidate is None:
+        if candidate is None or candidate != text:
             stage = 'reference_check'
             _progress(progress, stage)
             _timeout(deadline, VALIDATION_SECONDS)
             try:
-                candidate, evidence = _reference_verification(
+                referenced_candidate, evidence = _reference_verification(
                     video, text, reference, duration, starts, get_binary,
                     os.path.join(args.config_dir, 'cache', 'subtitle-reference'), deadline, progress)
             except (TimeoutError, subprocess.TimeoutExpired):
-                raise
+                if candidate is None:
+                    raise
+                referenced_candidate, evidence = None, {'reason': 'reference_timeout'}
             except Exception as error:
                 logging.warning('BAZARR Embedded dialogue evidence unavailable for %s (%s)',
                                 _safe_log_value(video.original_path), type(error).__name__)
-                return rejected(failure_reason, 'Available evidence could not confirm subtitle timing')
-            if candidate is None:
+                if candidate is None:
+                    return rejected(failure_reason, 'Available evidence could not confirm subtitle timing')
+                referenced_candidate, evidence = None, {'reason': 'reference_unavailable'}
+            if referenced_candidate is not None:
+                # Independent dialogue evidence takes precedence over a VAD
+                # peak, including when the original timestamps already match.
+                candidate = referenced_candidate
+                subtitle.audio_timing_method = 'embedded_original_dialogue'
+            elif candidate is None:
                 logging.info('BAZARR Subtitle timing remains inconclusive for %s: %s',
                              _safe_log_value(video.original_path), json.dumps(evidence))
                 return rejected(failure_reason, 'Available evidence could not confirm subtitle timing')
-            subtitle.audio_timing_method = 'embedded_original_dialogue'
         _timeout(deadline, VALIDATION_SECONDS)
         if candidate != text:
             subtitle.content = candidate.encode('utf-8')

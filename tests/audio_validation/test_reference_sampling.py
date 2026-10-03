@@ -140,11 +140,69 @@ def test_non_english_original_audio_does_not_probe_or_use_english_subtitles(monk
     run.assert_not_called()
 
 
+@pytest.mark.parametrize('title', ['English Full (Dialogue, Signs & Songs)',
+                                 'English Full (includes signs and songs)'])
+def test_complete_dialogue_track_can_include_signs_and_songs(monkeypatch, media, tmp_path, title):
+    run_fixture(monkeypatch, streams=[stream(title=title)])
+    assert extract(media, tmp_path)[1]['stream_index'] == 17
+
+
+def test_contradictory_full_dialogue_songs_only_title_remains_ineligible(monkeypatch, media, tmp_path):
+    calls = run_fixture(monkeypatch, streams=[stream(title='English Full dialogue - Songs only')])
+    assert extract(media, tmp_path) == ([], {'reason': 'reference_unavailable'})
+    assert len(calls) == 1
+
+
 def test_default_sdh_cannot_beat_non_sdh_and_uppercase_tags_are_supported(monkeypatch, media, tmp_path):
     original = stream(index=17, title='English Full')
     original['tags'] = {'LANGUAGE': 'ENG', 'TITLE': 'English Full'}
     run_fixture(monkeypatch, streams=[stream(18, title='English SDH', default=1), original])
     assert extract(media, tmp_path)[1]['stream_index'] == 17
+
+
+@pytest.mark.parametrize('title', ['English Signs & Songs', 'Signs and Songs', 'Signs/Songs',
+                                  'English Signs only', 'English Songs-only', 'Lyrics only', 'English Karaoke'])
+def test_explicit_partial_tracks_cannot_beat_full_sdh_or_serve_as_only_reference(monkeypatch, media, tmp_path, title):
+    full_sdh = stream(17, title='English Full SDH', hearing_impaired=1)
+    limited = stream(16, title=title)
+    run_fixture(monkeypatch, streams=[limited, full_sdh])
+    assert extract(media, tmp_path)[1]['stream_index'] == 17
+    calls = run_fixture(monkeypatch, streams=[limited])
+    assert extract(media, tmp_path) == ([], {'reason': 'reference_unavailable'})
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('title', ['English Full', 'English Full (includes songs)', 'Full dialogue and lyrics'])
+def test_full_dialogue_tracks_containing_songs_remain_eligible(monkeypatch, media, tmp_path, title):
+    run_fixture(monkeypatch, streams=[stream(title=title)])
+    cues, metadata = extract(media, tmp_path)
+    assert len(cues) == 5 and metadata['stream_index'] == 17
+
+
+@pytest.mark.parametrize('format_info', [{}, None, {'start_time': None}, {'start_time': 'N/A'},
+                                       {'start_time': ''}, {'start_time': 'unknown'}, {'start_time': 'nan'},
+                                       {'start_time': 'inf'}, {'start_time': True}])
+def test_unknown_origin_returns_specific_unavailable_reason_without_packet_reads_or_cache(
+        monkeypatch, media, tmp_path, format_info):
+    run = Mock(return_value={'streams': [stream()], 'format': format_info})
+    monkeypatch.setattr(sampling, '_run', run)
+    assert extract(media, tmp_path) == ([], {'reason': 'reference_unavailable',
+                                           'detail': 'unknown_timeline_origin', 'stream_index': 17})
+    assert run.call_count == 1
+    assert '-show_packets' not in run.call_args.args[0]
+    assert not (tmp_path / 'cache').exists()
+
+
+def test_origin_unknown_does_not_reuse_an_old_zero_origin_cache(monkeypatch, media, tmp_path):
+    run_fixture(monkeypatch)
+    extract(media, tmp_path)
+    cache, = (tmp_path / 'cache').glob('*.json')
+    original = cache.read_bytes()
+    run = Mock(return_value={'streams': [stream()], 'format': {}})
+    monkeypatch.setattr(sampling, '_run', run)
+    cues, metadata = extract(media, tmp_path)
+    assert cues == [] and metadata['detail'] == 'unknown_timeline_origin'
+    assert run.call_count == 1 and cache.read_bytes() == original
 
 
 def test_cache_hit_skips_packet_reads_and_atomic_write_leaves_no_tempfile(monkeypatch, media, tmp_path):
@@ -221,11 +279,33 @@ def test_cache_identity_changes_require_new_samples(monkeypatch, media, tmp_path
     assert len(calls) == 6
 
 
-def test_overlapping_windows_deduplicate_short_dialogue_without_size_filter(monkeypatch, media, tmp_path):
-    samples = [[packet(111, 'A')], [packet(111, 'A'), packet(115, 'No.')]]
+def test_duplicate_packets_do_not_inflate_short_dialogue_count(monkeypatch, media, tmp_path):
+    samples = [[packet(111, 'A'), packet(111, 'A'), packet(115, 'No.')]]
     run_fixture(monkeypatch, samples=samples)
-    cues, _ = extract(media, tmp_path, starts=[100, 110])
-    assert [(cue['text'], cue['window']) for cue in cues] == [('A', 1), ('No.', 2)]
+    cues, _ = extract(media, tmp_path, starts=[100])
+    assert [(cue['text'], cue['window']) for cue in cues] == [('A', 1), ('No.', 1)]
+
+
+@pytest.mark.parametrize('starts', [[100, 100], [110, 100], [100, 110], [100, 159.999], [100, 400, 400]])
+def test_repeated_reordered_and_overlapping_windows_are_rejected_before_any_probe(monkeypatch, media, tmp_path, starts):
+    run = Mock(side_effect=AssertionError('Invalid windows must not read media'))
+    monkeypatch.setattr(sampling, '_run', run)
+    with pytest.raises(ValueError, match='without overlap'):
+        extract(media, tmp_path, starts=starts)
+    run.assert_not_called()
+    assert not (tmp_path / 'cache').exists()
+
+
+def test_adjacent_windows_and_actual_movie_plan_remain_eligible(monkeypatch, media, tmp_path):
+    run_fixture(monkeypatch, samples=[[packet(101)], [packet(161)]])
+    cues, _ = extract(media, tmp_path, starts=[100, 160])
+    assert len(cues) == 2
+    starts = np.asarray([906.4, 2341.5, 3776.6, 5211.7, 6646.7])
+    calls = run_fixture(monkeypatch, samples=[[packet(start + 1)] for start in starts])
+    cues, metadata = sampling.extract_reference_cues(media, tmp_path / 'movie-cache', str,
+                                                     {'language': 'eng'}, starts, 7733.12)
+    assert len(cues) == 5 and metadata['stream_index'] == 17 and metadata['origin'] == 0
+    assert len(calls) == 6
 
 
 def test_expired_budget_and_cache_lock_never_start_packet_read(monkeypatch, media, tmp_path):

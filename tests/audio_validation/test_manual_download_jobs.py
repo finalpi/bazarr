@@ -226,6 +226,16 @@ def test_validation_machine_reason_is_explained_to_user(manual_namespace):
     assert 'obvious_fragment' not in message
 
 
+def test_unknown_chinese_script_is_explained_as_unconfirmed(manual_namespace):
+    subtitle = manual_namespace['subtitle_fixture']
+    subtitle.is_valid.return_value = False
+    subtitle.download_failure_reason = 'script_inconclusive'
+    message = lowlevel(manual_namespace)
+    assert 'Could not confirm' in message
+    assert 'not been permanently excluded' in message
+    manual_namespace['save_subtitles'].assert_not_called()
+
+
 def test_direct_legacy_caller_keeps_two_argument_validation(manual_namespace):
     namespace = manual_namespace
     namespace['validate_download'].return_value = False

@@ -145,25 +145,40 @@ def _content_script_evidence(text):
     return 'mixed' if mixed else None, bool(han_count), kana_hangul > han_count + 3
 
 
-def _member_script_allowed(name, candidate, subtitle):
+def _member_script_verdict(name, candidate, subtitle):
+    def verdict(accepted, reason):
+        return {'accepted': accepted, 'reason': reason}
+
     if subtitle.language.alpha3 != 'zho':
-        return False
+        return verdict(False, 'script_inconclusive')
     try:
         cues = pysubs2.SSAFile.from_string(_subtitle_text_for_parse(candidate.text))
         text = '\n'.join(cue.plaintext for cue in cues if not cue.is_comment)
     except (ValueError, TypeError, UnicodeError):
-        return False
+        return verdict(False, 'script_inconclusive')
     script, has_chinese, other_script = _content_script_evidence(text)
-    if not has_chinese or other_script or script == 'mixed':
-        return False
+    if other_script or (not has_chinese and re.search(r'[A-Za-z\u3040-\u30ff\uac00-\ud7af]', text)):
+        return verdict(False, 'script_mismatch')
+    if not has_chinese or script == 'mixed':
+        return verdict(False, 'script_inconclusive')
     wanted = _requested_script(subtitle.language)
     named_scripts = _script_markers(os.path.basename(name)) if name else set()
     if script:
-        return script == wanted and (not named_scripts or script in named_scripts)
+        accepted = script == wanted and (not named_scripts or script in named_scripts)
+        return verdict(accepted, 'script_match' if accepted else 'script_mismatch')
     if named_scripts:
-        return named_scripts == {wanted}
+        if named_scripts == {wanted}:
+            return verdict(True, 'script_match')
+        return verdict(False, 'script_mismatch' if wanted not in named_scripts else 'script_inconclusive')
     page_scripts, foreign_only = _tag_language_evidence(getattr(subtitle, 'subtitle_tags', []))
-    return not foreign_only and page_scripts == {wanted}
+    if page_scripts and wanted not in page_scripts:
+        return verdict(False, 'script_mismatch')
+    accepted = not foreign_only and page_scripts == {wanted}
+    return verdict(accepted, 'script_match' if accepted else 'script_inconclusive')
+
+
+def _member_script_allowed(name, candidate, subtitle):
+    return _member_script_verdict(name, candidate, subtitle)['accepted']
 
 
 def _archive_names_and_reader(content):
@@ -300,7 +315,10 @@ def _log_member(record):
 def _remember_failure(selection_info, reason):
     priorities = {'parse_loss': 4, 'obvious_fragment': 3, 'script_mismatch': 2}
     previous = selection_info.get('failure_reason')
-    if previous is None or priorities.get(reason, 1) > priorities.get(previous, 1):
+    # A package is a permanent mismatch only when every selectable member was
+    # definitively rejected. Unknown script, unreadable data, and parse errors
+    # leave another possible member unverified.
+    if previous is None or priorities.get(reason, 5) > priorities.get(previous, 5):
         selection_info['failure_reason'] = reason
 
 
@@ -326,13 +344,14 @@ def _evaluate_member(content, name, subtitle, fallback_format=None, display_name
     duration = getattr(subtitle.video, 'duration', None)
     forced = getattr(subtitle.language, 'forced', False) is True
     partial = getattr(subtitle, 'is_partial', False) is True
-    encoding, valid, script_allowed, error_type = None, False, False, None
+    encoding, valid, script_verdict, error_type = None, False, None, None
     try:
         text = candidate.text
         encoding = candidate.get_encoding()
         coverage = subtitle_coverage(text, duration, forced=forced, partial=partial)
         valid = bool(subtitle_format and candidate.is_valid())
-        script_allowed = valid and _member_script_allowed(name, candidate, subtitle)
+        if valid:
+            script_verdict = _member_script_verdict(name, candidate, subtitle)
     except Exception as error:
         coverage = subtitle_coverage(None, duration, forced=forced, partial=partial)
         error_type = type(error).__name__
@@ -342,8 +361,8 @@ def _evaluate_member(content, name, subtitle, fallback_format=None, display_name
     record['coverage_reason'] = coverage['reason']
     if not valid:
         record.update(accepted=False, reason='invalid_format')
-    elif not script_allowed:
-        record.update(accepted=False, reason='script_mismatch')
+    elif not script_verdict or not script_verdict['accepted']:
+        record.update(accepted=False, reason=script_verdict['reason'] if script_verdict else 'script_inconclusive')
     if error_type:
         record['exception_type'] = error_type
     _log_member(record)
@@ -381,12 +400,13 @@ def _extract_download(content, subtitle, _depth=0, _budget=None):
 
 def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_context=None, _fallback_name=None,
                            _selection_info=None, _archive_path=()):
+    if _selection_info is None:
+        _selection_info = {}
     if _depth >= _MAX_ARCHIVE_DEPTH:
+        _remember_failure(_selection_info, 'script_inconclusive')
         return None, None, None
     if _budget is None:
         _budget = [_MAX_EXTRACTED_BYTES]
-    if _selection_info is None:
-        _selection_info = {}
     criteria = dict(
         season=getattr(subtitle.video, 'season', None),
         episode=getattr(subtitle.video, 'episode', None),
@@ -400,8 +420,11 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
             ranked = _rank_archive_members(
                 [name for name in names if _matches_archive_episode(name, criteria) and
                  _filename_allowed(name, subtitle)], criteria, _episode_context)
+            if len(ranked) > _MAX_ARCHIVE_CANDIDATES:
+                _remember_failure(_selection_info, 'script_inconclusive')
             for selected in ranked[:_MAX_ARCHIVE_CANDIDATES]:
                 if _budget[0] <= 0:
+                    _remember_failure(_selection_info, 'script_inconclusive')
                     break
                 try:
                     extracted = reader(selected, min(_MAX_ARCHIVE_MEMBER_BYTES, _budget[0]))
@@ -410,6 +433,7 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
                     logger.debug('Skipping unreadable SubHD archive member: %s', selected, exc_info=True)
                     continue
                 if len(extracted) > _budget[0]:
+                    _remember_failure(_selection_info, 'script_inconclusive')
                     return best
                 _budget[0] -= len(extracted)
                 extension = os.path.splitext(selected)[1].lstrip('.').lower()
@@ -428,16 +452,22 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
             # Some season releases contain one archive per episode instead of
             # subtitle files. Rank their explicit episode markers through the
             # same criteria, then read only matching inner archives.
-            if _depth + 1 >= _MAX_ARCHIVE_DEPTH:
-                return best
             nested = {
                 name + '.srt': name for name in names
                 if os.path.splitext(name)[1].lower() in _ARCHIVE_EXTENSIONS and
                 (criteria['episode'] is None or _episode_markers(name)) and
                 _matches_archive_episode(name, criteria)
             }
-            for virtual_name in _rank_archive_members(nested, criteria, _episode_context)[:_MAX_ARCHIVE_CANDIDATES]:
+            if _depth + 1 >= _MAX_ARCHIVE_DEPTH:
+                if nested:
+                    _remember_failure(_selection_info, 'script_inconclusive')
+                return best
+            ranked_nested = _rank_archive_members(nested, criteria, _episode_context)
+            if len(ranked_nested) > _MAX_ARCHIVE_CANDIDATES:
+                _remember_failure(_selection_info, 'script_inconclusive')
+            for virtual_name in ranked_nested[:_MAX_ARCHIVE_CANDIDATES]:
                 if _budget[0] <= 0:
+                    _remember_failure(_selection_info, 'script_inconclusive')
                     break
                 selected = nested[virtual_name]
                 try:
@@ -447,6 +477,7 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
                     logger.debug('Skipping unreadable nested SubHD archive: %s', selected, exc_info=True)
                     continue
                 if len(inner) > _budget[0]:
+                    _remember_failure(_selection_info, 'script_inconclusive')
                     return best
                 _budget[0] -= len(inner)
                 _log_member({'member': _safe_member_name('/'.join(_archive_path + (selected,))),

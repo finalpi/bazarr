@@ -26,6 +26,11 @@ DEFAULT_BUDGET_SECONDS = 150
 LOCKS = [threading.Lock() for _ in range(16)]
 _COMMENTARY = re.compile(r'comment(?:ary|aire)?|director|解说|評論|评论|комментар|kommentar', re.I)
 _FORCED = re.compile(r'\bforced\b|强制|強制', re.I)
+_LIMITED = re.compile(r'\bsigns\s*(?:&|and|\+|/)\s*songs\b|'
+                      r'\b(?:signs|songs|lyrics)[\s_-]*only\b|\bonly[\s_-]*(?:signs|songs|lyrics)\b|'
+                      r'\bkaraoke\b', re.I)
+_ONLY = re.compile(r'\b(?:signs|songs|lyrics)[\s_-]*only\b|\bonly[\s_-]*(?:signs|songs|lyrics)\b', re.I)
+_FULL_DIALOGUE = re.compile(r'\bfull\b.*\b(?:dialogue|includes?|including)\b', re.I)
 _SDH = re.compile(r'\b(?:sdh|hi|cc)\b|hearing[ _-]?impaired|closed[ _-]?caption', re.I)
 
 
@@ -66,8 +71,11 @@ def _select_stream(streams):
             continue
         title = str(tags.get('title') or '')
         disposition = stream.get('disposition') or {}
+        limited = bool(_LIMITED.search(title))
+        if _FULL_DIALOGUE.search(title) and not _ONLY.search(title):
+            limited = False
         if _flag(disposition.get('forced')) or _flag(disposition.get('comment')) or \
-                _COMMENTARY.search(title) or _FORCED.search(title):
+                _COMMENTARY.search(title) or _FORCED.search(title) or limited:
             continue
         index = stream.get('index')
         if isinstance(index, bool) or not isinstance(index, (int, str)) or not str(index).isdigit():
@@ -172,6 +180,8 @@ def extract_reference_cues(video_path, cache_dir, binary, audio_reference, start
             not math.isfinite(start) or not 0 <= start < duration for start in starts):
         raise ValueError('Invalid subtitle reference window plan')
     windows = [[start, min(start + WINDOW_SECONDS, duration)] for start in starts]
+    if any(current[1] > following[0] for current, following in zip(windows, windows[1:])):
+        raise ValueError('Subtitle reference windows must increase without overlap')
     path = Path(video_path).resolve(strict=True)
     stat = path.stat()
     probe = _run([binary('ffprobe'), '-v', 'error', '-select_streams', 's', '-show_entries',
@@ -182,10 +192,15 @@ def extract_reference_cues(video_path, cache_dir, binary, audio_reference, start
     if selected is None:
         return [], {'reason': 'reference_unavailable'}
     _, stream_index, title = selected
-    raw_origin = probe.get('format', {}).get('start_time')
-    origin = 0.0 if raw_origin in (None, 'N/A') else float(raw_origin)
+    format_info = probe.get('format')
+    raw_origin = format_info.get('start_time') if isinstance(format_info, dict) else None
+    try:
+        origin = float(raw_origin) if not isinstance(raw_origin, bool) else float('nan')
+    except (TypeError, ValueError, OverflowError):
+        origin = float('nan')
     if not math.isfinite(origin):
-        raise ValueError('Invalid subtitle reference timeline origin')
+        return [], {'reason': 'reference_unavailable', 'detail': 'unknown_timeline_origin',
+                    'stream_index': stream_index}
     identity = {'path': str(path), 'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns,
                 'stream_index': stream_index, 'windows': windows, 'origin': origin, 'version': VERSION}
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode('utf-8')).hexdigest()
