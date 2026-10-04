@@ -353,7 +353,8 @@ def _manual_job_failure(job_id, description, progress, error):
 
 @update_pools
 def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provider, sceneName, title, media_type,
-                             use_original_format, profile_id, job_id=None, progress=None):
+                             use_original_format, profile_id, job_id=None, progress=None,
+                             prepared_subtitle=None, prepared_video=None, before_save=None, after_save=None):
     logging.debug(f'BAZARR Manually downloading Subtitles for this file: {path}')
 
     if settings.general.utf8_encode:
@@ -361,7 +362,7 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
     else:
         os.environ["SZ_KEEP_ENCODING"] = "True"
 
-    subtitle = subtitle_cache.get(subtitle)
+    subtitle = prepared_subtitle if prepared_subtitle is not None else subtitle_cache.get(subtitle)
     if subtitle is None:
         logging.error("BAZARR Subtitle not found in cache (expired or invalid ID)")
         return 'Subtitle not found in cache. Please search again.'
@@ -375,11 +376,14 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
         subtitle.language.forced = False
     if use_original_format in (1, "1", "True", True):
         subtitle.use_original_format = True
+    elif prepared_subtitle is not None:
+        subtitle.use_original_format = False
 
     subtitle.mods = get_array_from(settings.general.subzero_mods)
     if progress:
         progress('download_unpack')
-    video = get_video(force_unicode(path), title, sceneName, providers={provider}, media_type=media_type)
+    video = (prepared_video if prepared_video is not None else
+             get_video(force_unicode(path), title, sceneName, providers={provider}, media_type=media_type))
     if video:
         # Search results can outlive a metadata refresh. Archive completeness
         # must use the current probe duration while retaining the candidate's
@@ -395,7 +399,8 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
                 rejection.get('detail') or rejection['reason']) + '. Use Allow retry before downloading it again.'
         try:
             if provider:
-                download_subtitles([subtitle], _get_pool(media_type, profile_id))
+                if prepared_subtitle is None:
+                    download_subtitles([subtitle], _get_pool(media_type, profile_id))
                 if progress:
                     progress('downloaded')
                 logging.debug(f'BAZARR Subtitles file downloaded for this file: {path}')
@@ -426,6 +431,8 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
             try:
                 chmod = int(settings.general.chmod, 8) if not sys.platform.startswith(
                     'win') and settings.general.chmod_enabled else None
+                if before_save:
+                    before_save(video, subtitle)
                 saved_subtitles = save_subtitles(video.original_path, [subtitle],
                                                  single=settings.general.single_language,
                                                  tags=None,  # fixme
@@ -446,6 +453,8 @@ def manual_download_subtitle(path, audio_language, hi, forced, subtitle, provide
                         save_path = getattr(saved_subtitle, 'storage_path', None)
                         if not save_path or not os.path.isfile(save_path):
                             return 'Subtitle saving did not produce a file on disk'
+                        if after_save:
+                            after_save(saved_subtitle)
                         if progress:
                             progress('postprocessing', {'save_path': save_path})
                         processed_subtitle = process_subtitle(subtitle=saved_subtitle, media_type=media_type,

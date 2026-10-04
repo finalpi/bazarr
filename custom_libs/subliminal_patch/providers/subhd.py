@@ -51,6 +51,7 @@ _MAX_ARCHIVE_DEPTH = 3
 _MAX_ARCHIVE_MEMBER_BYTES = 32 * 1024 * 1024
 _MAX_EXTRACTED_BYTES = 64 * 1024 * 1024
 _MAX_ARCHIVE_CANDIDATES = 20
+_MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 _SCRIPT_MARKERS = {
     'zh': re.compile(r'(?<![a-z0-9])(?:chs|sc|zhs|hans|zh[-_ ]?(?:cn|hans)|gb|simplified)(?![a-z0-9])|'
                      r'简体|簡體|简中|簡中|简英|簡英|(?<![\u3400-\u9fff])(?:简|簡)(?![\u3400-\u9fff])', re.I),
@@ -240,6 +241,62 @@ def _matches_archive_episode(name, criteria):
         for marked_season, ep in markers)
 
 
+def _strict_member_identity(name, context=None):
+    """Read explicit season/episode evidence without ordering or absolute-number guesses."""
+    seasons, episodes = set(), set()
+    if context:
+        if context[0] is not None:
+            seasons.add(context[0])
+        if context[1] is not None:
+            episodes.add(context[1])
+    parts = str(name or '').replace('\\', '/').split('/')
+    for index, part in enumerate(parts):
+        marked_seasons = {int(value) for value in re.findall(
+            r'(?i)(?<![a-z0-9])(?:season[ ._-]*|s)(\d{1,2})(?!\d)', part)}
+        pairs = re.findall(r'(?i)(?<![a-z0-9])(\d{1,2})x(\d{1,4})(?!\d)', part)
+        marked_seasons.update(int(season) for season, _ in pairs)
+        marked_episodes = {int(episode) for _, episode in pairs}
+        marked_episodes.update(int(value) for value in re.findall(
+            r'(?i)(?<![a-z])e(?:p)?(\d{1,4})(?!\d)', part))
+        season_range = re.search(
+            r'(?i)(?:season[ ._-]*|(?<![a-z0-9])s)\d{1,2}\s*[-+&,~～]\s*'
+            r'(?:season[ ._-]*|s)?\d{1,2}(?![a-z0-9])', part)
+        # A multi-season collection directory is not an assertion that every
+        # contained episode belongs to its first season. Inner explicit identity
+        # still has to be complete; a single-season parent remains binding.
+        is_container = index < len(parts) - 1 or os.path.splitext(part)[1].lower() in _ARCHIVE_EXTENSIONS
+        if is_container and not marked_episodes and (season_range or len(marked_seasons) > 1):
+            continue
+        if season_range or re.search(
+                r'(?i)(?:e(?:p)?\d{1,4}|\d{1,2}x\d{1,4})\s*[-+&,~～]\s*'
+                r'(?:s\d{1,2})?(?:e(?:p)?)?\d{1,4}(?![a-z0-9])', part):
+            return None
+        seasons.update(marked_seasons)
+        episodes.update(marked_episodes)
+        if index == len(parts) - 1:
+            stem = os.path.splitext(part)[0]
+            if re.match(r'^\d{1,3}\s*[-+&,~～]\s*\d', stem):
+                return None
+            number = re.match(r'(?i)^(\d{1,3})(?=$|[._ -](?:chs|cht|eng|zh|hans|hant)(?:$|[&+._ -]))', stem)
+            if number:
+                episodes.add(int(number.group(1)))
+    if len(seasons) > 1 or len(episodes) > 1:
+        return None
+    return (next(iter(seasons), None), next(iter(episodes), None))
+
+
+def _strict_identity_matches(identity, criteria, complete=False):
+    season, episode = criteria['season'], criteria['episode']
+    if (identity is None or isinstance(season, bool) or isinstance(episode, bool) or
+            not isinstance(season, int) or not isinstance(episode, int) or season < 0 or episode < 0):
+        return False
+    if identity[0] is not None and identity[0] != season:
+        return False
+    if identity[1] is not None and identity[1] != episode:
+        return False
+    return not complete or identity == (season, episode)
+
+
 def _detect_subtitle_format(content, fallback=None):
     probe = content[:8192]
     text = None
@@ -373,14 +430,14 @@ def _selection_rank(coverage, filename_score):
     return (coverage['coverage_class'] == 'full', filename_score or 0)
 
 
-def _extract_download(content, subtitle, _depth=0, _budget=None):
+def _extract_download(content, subtitle, _depth=0, _budget=None, strict_episode=False):
     started = time.monotonic()
     selection_info = {}
     subtitle.selected_archive_member = None
     extracted, subtitle_format = None, None
     try:
         extracted, subtitle_format, _ = _extract_download_best(
-            content, subtitle, _depth, _budget, _selection_info=selection_info)
+            content, subtitle, _depth, _budget, _selection_info=selection_info, _strict_episode=strict_episode)
         subtitle.download_failure_reason = None if extracted else selection_info.get(
             'failure_reason', 'no_eligible_subtitle')
         if extracted:
@@ -398,8 +455,16 @@ def _extract_download(content, subtitle, _depth=0, _budget=None):
         }, ensure_ascii=False))
 
 
+def extract_archive_subtitle(content, subtitle, strict_episode=True):
+    # Cached candidates may already have been normalized by an earlier download.
+    subtitle.encoding = None
+    subtitle._guessed_encoding = None
+    subtitle._is_valid = False
+    return _extract_download(content, subtitle, strict_episode=strict_episode)
+
+
 def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_context=None, _fallback_name=None,
-                           _selection_info=None, _archive_path=()):
+                           _selection_info=None, _archive_path=(), _strict_episode=False, _strict_context=None):
     if _selection_info is None:
         _selection_info = {}
     if _depth >= _MAX_ARCHIVE_DEPTH:
@@ -413,13 +478,20 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
         absolute_episode=getattr(subtitle.video, 'absolute_episode', None),
         desired_language=str(subtitle.language), hearing_impaired=subtitle.hearing_impaired,
         forced=subtitle.language.forced)
+    if _strict_episode and not _strict_identity_matches((None, None), criteria):
+        _remember_failure(_selection_info, 'episode_identity_unconfirmed')
+        return None, None, None
+    rank_context = ('S%02dE%02d' % (criteria['season'], criteria['episode'])
+                    if _strict_episode else _episode_context)
     names, reader, closer = _archive_names_and_reader(content)
     if names is not None:
         try:
             best = (None, None, None)
             ranked = _rank_archive_members(
-                [name for name in names if _matches_archive_episode(name, criteria) and
-                 _filename_allowed(name, subtitle)], criteria, _episode_context)
+                [name for name in names if (
+                    _strict_identity_matches(_strict_member_identity(name, _strict_context), criteria, complete=True)
+                    if _strict_episode else _matches_archive_episode(name, criteria)) and
+                 _filename_allowed(name, subtitle)], criteria, rank_context)
             if len(ranked) > _MAX_ARCHIVE_CANDIDATES:
                 _remember_failure(_selection_info, 'script_inconclusive')
             for selected in ranked[:_MAX_ARCHIVE_CANDIDATES]:
@@ -440,7 +512,7 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
                 record, subtitle_format = _evaluate_member(
                     extracted, selected, subtitle, extension, '/'.join(_archive_path + (selected,)))
                 if record['accepted']:
-                    rank = _selection_rank(record, _archive_member_score(selected, criteria, _episode_context))
+                    rank = _selection_rank(record, _archive_member_score(selected, criteria, rank_context))
                     if best[2] is None or rank > best[2]:
                         best = (extracted, subtitle_format, rank)
                         _selection_info.update(record)
@@ -455,14 +527,15 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
             nested = {
                 name + '.srt': name for name in names
                 if os.path.splitext(name)[1].lower() in _ARCHIVE_EXTENSIONS and
-                (criteria['episode'] is None or _episode_markers(name)) and
-                _matches_archive_episode(name, criteria)
+                (_strict_identity_matches(_strict_member_identity(name, _strict_context), criteria)
+                 if _strict_episode else (criteria['episode'] is None or _episode_markers(name)) and
+                 _matches_archive_episode(name, criteria))
             }
             if _depth + 1 >= _MAX_ARCHIVE_DEPTH:
                 if nested:
                     _remember_failure(_selection_info, 'script_inconclusive')
                 return best
-            ranked_nested = _rank_archive_members(nested, criteria, _episode_context)
+            ranked_nested = _rank_archive_members(nested, criteria, rank_context)
             if len(ranked_nested) > _MAX_ARCHIVE_CANDIDATES:
                 _remember_failure(_selection_info, 'script_inconclusive')
             for virtual_name in ranked_nested[:_MAX_ARCHIVE_CANDIDATES]:
@@ -490,7 +563,8 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
                     candidate = _extract_download_best(
                         inner, subtitle, _depth + 1, _budget,
                         _archive_episode_context(selected, criteria, _episode_context), virtual_name,
-                        inner_selection, _archive_path + (selected,))
+                        inner_selection, _archive_path + (selected,), _strict_episode,
+                        _strict_member_identity(selected, _strict_context) if _strict_episode else None)
                 except (OSError, ValueError, RuntimeError, BadZipFile, rarfile.Error) as error:
                     _unreadable_member('/'.join(_archive_path + (selected,)), _selection_info, error)
                     logger.debug('Skipping invalid nested SubHD archive: %s', selected, exc_info=True)
@@ -509,6 +583,10 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
         name = None
     else:
         name = _fallback_name
+    if _strict_episode and not _strict_identity_matches(
+            _strict_member_identity(name, _strict_context), criteria, complete=True):
+        _remember_failure(_selection_info, 'episode_identity_unconfirmed')
+        return None, None, None
     if name and not _filename_allowed(name, subtitle):
         _remember_failure(_selection_info, 'script_mismatch')
         return None, None, None
@@ -518,7 +596,7 @@ def _extract_download_best(content, subtitle, _depth=0, _budget=None, _episode_c
         _remember_failure(_selection_info, record['reason'])
         return None, None, None
     _selection_info.update(record)
-    score = _archive_member_score(name, criteria, _episode_context) if name else None
+    score = _archive_member_score(name, criteria, rank_context) if name else None
     return content, subtitle_format, _selection_rank(record, score)
 
 
@@ -590,7 +668,7 @@ class SubhdProvider(Provider):
 
     @staticmethod
     def _curl(url, method='GET', body=None, cookie_jar=None, referer=None, headers_file=None,
-              timeout=20, proxy_url=None):
+              timeout=20, proxy_url=None, max_bytes=None):
         args = ['curl', '-sS', '--fail-with-body', '--max-time', str(timeout), '-A', _USER_AGENT]
         if proxy_url:
             args.extend(['-x', proxy_url])
@@ -607,6 +685,20 @@ class SubhdProvider(Provider):
                          '-H', 'Origin: ' + origin, '-H', 'Content-Type: application/json'])
         if body is not None:
             args.extend(['--data', json.dumps(body, separators=(',', ':'))])
+        if max_bytes is not None:
+            if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1:
+                raise ValueError('SubHD download size limit must be a positive integer')
+            with tempfile.TemporaryDirectory(prefix='bazarr-subhd-payload-') as directory:
+                output = os.path.join(directory, 'archive')
+                args.extend(['--max-filesize', str(max_bytes), '--output', output, url])
+                subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if os.path.getsize(output) > max_bytes:
+                    raise ValueError('SubHD archive exceeds the download size limit')
+                with open(output, 'rb') as payload:
+                    content = payload.read(max_bytes + 1)
+                if len(content) > max_bytes:
+                    raise ValueError('SubHD archive exceeds the download size limit')
+                return content
         args.append(url)
         return subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
@@ -754,13 +846,10 @@ class SubhdProvider(Provider):
                     break
         return subtitles
 
-    def download_subtitle(self, subtitle):
+    def download_archive(self, subtitle):
+        """Fetch one bounded payload without extracting or assigning subtitle content."""
         started = time.monotonic()
         subtitle.download_failure_reason = None
-        subtitle.selected_archive_member = None
-        subtitle.encoding = None
-        subtitle._guessed_encoding = None
-        subtitle._is_valid = False
         parsed_page = urlparse(subtitle.page_link)
         host = '%s://%s' % (parsed_page.scheme, parsed_page.netloc)
         subtitle_id = subtitle.subtitle_id
@@ -791,31 +880,15 @@ class SubhdProvider(Provider):
                             for suffix in _TRUSTED_DOWNLOAD_SUFFIXES):
                         raise ValueError('SubHD returned an untrusted download URL')
                     stage = 'fetch_package'
-                    content = self._request(url, timeout=60)
-                    stage = 'select_member'
-                    extracted, subtitle_format = _extract_download(content, subtitle)
-                    if not extracted:
-                        subtitle.download_failure_reason = subtitle.download_failure_reason or 'no_eligible_subtitle'
-                        logging.warning('BAZARR SubHD package rejected: %s', json.dumps({
-                            'provider': 'subhd', 'subtitle_id': _safe_subtitle_id(subtitle),
-                            'language': str(subtitle.language), 'stage': stage,
-                            'reason': subtitle.download_failure_reason,
-                            'elapsed_seconds': round(time.monotonic() - started, 3),
-                        }, ensure_ascii=False))
-                        subtitle.content = None
-                        return
-                    subtitle.content = fix_line_ending(extracted)
-                    subtitle.encoding = None
-                    subtitle._guessed_encoding = None
-                    subtitle._is_valid = False
-                    if subtitle_format:
-                        subtitle.format = subtitle_format
-                    logging.info('BAZARR SubHD package download finished: %s', json.dumps({
+                    content = self._request(url, timeout=60, max_bytes=_MAX_DOWNLOAD_BYTES)
+                    if len(content) > _MAX_DOWNLOAD_BYTES:
+                        raise ValueError('SubHD archive exceeds the download size limit')
+                    logging.info('BAZARR SubHD archive download finished: %s', json.dumps({
                         'provider': 'subhd', 'subtitle_id': _safe_subtitle_id(subtitle),
-                        'language': str(subtitle.language),
+                        'raw_bytes': len(content),
                         'elapsed_seconds': round(time.monotonic() - started, 3),
                     }, ensure_ascii=False))
-                    return
+                    return content
             except (BadZipFile, OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as error:
                 last_error_type = type(error).__name__
                 exit_code = getattr(error, 'returncode', None)
@@ -831,4 +904,44 @@ class SubhdProvider(Provider):
             'stage': stage, 'exception_type': last_error_type,
             'elapsed_seconds': round(time.monotonic() - started, 3),
         }, ensure_ascii=False))
-        subtitle.content = None
+        raise ValueError('SubHD archive download failed') from None
+
+    def download_subtitle(self, subtitle):
+        started = time.monotonic()
+        subtitle.selected_archive_member = None
+        subtitle.encoding = None
+        subtitle._guessed_encoding = None
+        subtitle._is_valid = False
+        try:
+            content = self.download_archive(subtitle)
+            extracted, subtitle_format = _extract_download(content, subtitle)
+        except (BadZipFile, OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as error:
+            subtitle.content = None
+            subtitle.download_failure_reason = 'download_failed'
+            logging.warning('BAZARR SubHD download could not finish: %s', json.dumps({
+                'provider': 'subhd', 'subtitle_id': _safe_subtitle_id(subtitle),
+                'exception_type': type(error).__name__,
+                'elapsed_seconds': round(time.monotonic() - started, 3),
+            }, ensure_ascii=False))
+            return
+        if not extracted:
+            subtitle.download_failure_reason = subtitle.download_failure_reason or 'no_eligible_subtitle'
+            logging.warning('BAZARR SubHD package rejected: %s', json.dumps({
+                'provider': 'subhd', 'subtitle_id': _safe_subtitle_id(subtitle),
+                'language': str(subtitle.language), 'stage': 'select_member',
+                'reason': subtitle.download_failure_reason,
+                'elapsed_seconds': round(time.monotonic() - started, 3),
+            }, ensure_ascii=False))
+            subtitle.content = None
+            return
+        subtitle.content = fix_line_ending(extracted)
+        subtitle.encoding = None
+        subtitle._guessed_encoding = None
+        subtitle._is_valid = False
+        if subtitle_format:
+            subtitle.format = subtitle_format
+        logging.info('BAZARR SubHD package download finished: %s', json.dumps({
+            'provider': 'subhd', 'subtitle_id': _safe_subtitle_id(subtitle),
+            'language': str(subtitle.language),
+            'elapsed_seconds': round(time.monotonic() - started, 3),
+        }, ensure_ascii=False))

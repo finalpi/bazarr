@@ -49,6 +49,9 @@ jobs:
           tests/audio_validation/test_subhd_coverage_selection.py
           tests/audio_validation/test_subhd_script_guard.py
           tests/audio_validation/test_false_rejection_regression.py
+          tests/audio_validation/test_subhd_season_archive.py
+          tests/audio_validation/test_season_download.py
+          tests/audio_validation/test_season_save_boundaries.py
           -q
 
   publish:

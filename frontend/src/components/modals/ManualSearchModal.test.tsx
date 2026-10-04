@@ -31,6 +31,29 @@ const result: SearchResultType = {
   original_format: "True",
 };
 
+const seasonPreview: SeasonReplacementPreview = {
+  series_id: 9,
+  season: 2,
+  title: "Maria Holic",
+  language: "zh",
+  provider: "subhd",
+  total: 2,
+  episodes: [
+    {
+      episode_id: 46,
+      episode: 4,
+      title: "Episode four",
+      existing_subtitles: 1,
+    },
+    {
+      episode_id: 47,
+      episode: 5,
+      title: "Episode five",
+      existing_subtitles: 2,
+    },
+  ],
+};
+
 function renderSearch(
   download: (
     item: Item.Movie | Item.Episode,
@@ -483,6 +506,287 @@ describe("manual subtitle search", () => {
     expect(queued).toHaveBeenCalledWith("9", "chosen-subtitle-uuid");
     expect(
       screen.queryByRole("button", { name: "Downloaded" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("previews the current episode's SubHD season and queues only after explicit confirmation", async () => {
+    const user = userEvent.setup();
+    const previews: URLSearchParams[] = [];
+    const submissions: FormData[] = [];
+    const chosen: SearchResultType = { ...result, hearing_impaired: "True" };
+    server.use(
+      http.get("/api/providers/episodes", () =>
+        HttpResponse.json({ data: [chosen] }),
+      ),
+      http.get("/api/providers/episodes/season", ({ request }) => {
+        previews.push(new URL(request.url).searchParams);
+        return HttpResponse.json(seasonPreview);
+      }),
+      http.post("/api/providers/episodes/season", async ({ request }) => {
+        submissions.push(await request.formData());
+        return HttpResponse.json({ job_id: 77 }, { status: 202 });
+      }),
+    );
+    const { download } = renderSearch(undefined, "episode");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Maria.Holic.CHS.ass");
+    expect(previews).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "Replace season" }));
+    await screen.findByText("Maria Holic — Season 2: 2 episodes");
+    expect(previews).toHaveLength(1);
+    expect(previews[0].get("episodeid")).toBe("47");
+    expect(previews[0].get("subtitle")).toBe("chosen-subtitle-uuid");
+    expect(previews[0].has("seriesid")).toBe(false);
+    expect(previews[0].has("season")).toBe(false);
+    expect(screen.getByText("Subtitle language:")).toBeVisible();
+    expect(
+      screen.getByText("E04 — Episode four (1 existing external subtitles)"),
+    ).toBeVisible();
+    expect(
+      screen.getByText("E05 — Episode five (2 existing external subtitles)"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        /Episodes that fail validation keep their existing subtitles/,
+      ),
+    ).toBeVisible();
+    expect(submissions).toHaveLength(0);
+    expect(download).not.toHaveBeenCalled();
+    await user.click(
+      screen.getByRole("button", { name: "Replace season 2 (2 episodes)" }),
+    );
+    await screen.findByText("Season replacement queued");
+    expect(screen.getByText(/queued as job #77/)).toBeVisible();
+    expect(submissions).toHaveLength(1);
+    expect(Object.fromEntries(submissions[0])).toEqual({
+      episodeid: "47",
+      subtitle: "chosen-subtitle-uuid",
+      hi: "True",
+      forced: "False",
+      original_format: "True",
+    });
+    expect(download).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: "Replace season 2 (2 episodes)" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Replace season" }),
+    ).toBeDisabled();
+  });
+
+  it("allows season preview for a single-episode mismatch while leaving Download blocked", async () => {
+    const user = userEvent.setup();
+    const rejected: SearchResultType = {
+      ...result,
+      rejected: true,
+      rejection: { id: 88, reason: "timing_mismatch" },
+    };
+    const preview = vi.fn();
+    server.use(
+      http.get("/api/providers/episodes", () =>
+        HttpResponse.json({ data: [rejected] }),
+      ),
+      http.get("/api/providers/episodes/season", () => {
+        preview();
+        return HttpResponse.json(seasonPreview);
+      }),
+    );
+    const { download } = renderSearch(undefined, "episode");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Not matched");
+    expect(screen.getByRole("button", { name: "Download" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Replace season" }),
+    ).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Replace season" }));
+    await screen.findByRole("button", {
+      name: "Replace season 2 (2 episodes)",
+    });
+    expect(preview).toHaveBeenCalledOnce();
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it.each(["movie", "episode"] as const)(
+    "does not offer season replacement for unsupported %s results",
+    async (mediaType) => {
+      const user = userEvent.setup();
+      const path =
+        mediaType === "movie"
+          ? "/api/providers/movies"
+          : "/api/providers/episodes";
+      server.use(
+        http.get(path, () =>
+          HttpResponse.json({
+            data: [
+              {
+                ...result,
+                provider: mediaType === "movie" ? "subhd" : "r3sub",
+              },
+            ],
+          }),
+        ),
+      );
+      renderSearch(undefined, mediaType);
+      await user.click(screen.getByRole("button", { name: "Search" }));
+      await screen.findByText("Maria.Holic.CHS.ass");
+      expect(
+        screen.queryByRole("button", { name: "Replace season" }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("cancels a season preview without submitting or downloading", async () => {
+    const user = userEvent.setup();
+    const post = vi.fn();
+    server.use(
+      http.get("/api/providers/episodes", () =>
+        HttpResponse.json({ data: [result] }),
+      ),
+      http.get("/api/providers/episodes/season", () =>
+        HttpResponse.json(seasonPreview),
+      ),
+      http.post("/api/providers/episodes/season", () => {
+        post();
+        return HttpResponse.json({ job_id: 77 }, { status: 202 });
+      }),
+    );
+    const { download } = renderSearch(undefined, "episode");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Maria.Holic.CHS.ass");
+    await user.click(screen.getByRole("button", { name: "Replace season" }));
+    await screen.findByRole("button", {
+      name: "Replace season 2 (2 episodes)",
+    });
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(
+      screen.queryByText("Season replacement preview"),
+    ).not.toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("does not reopen a cancelled preview when its pending response arrives", async () => {
+    const user = userEvent.setup();
+    let finishPreview: (() => void) | undefined;
+    const responseReady = new Promise<void>((resolve) => {
+      finishPreview = resolve;
+    });
+    server.use(
+      http.get("/api/providers/episodes", () =>
+        HttpResponse.json({ data: [result] }),
+      ),
+      http.get("/api/providers/episodes/season", async () => {
+        await responseReady;
+        return HttpResponse.json(seasonPreview);
+      }),
+    );
+    renderSearch(undefined, "episode");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Maria.Holic.CHS.ass");
+    await user.click(screen.getByRole("button", { name: "Replace season" }));
+    await screen.findByText("Loading season preview…");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    finishPreview?.();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Replace season" }),
+      ).toBeEnabled(),
+    );
+    expect(
+      screen.queryByText("Season replacement preview"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Replace season 2 (2 episodes)" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("cannot confirm a season preview without local episodes", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/providers/episodes", () =>
+        HttpResponse.json({ data: [result] }),
+      ),
+      http.get("/api/providers/episodes/season", () =>
+        HttpResponse.json({ ...seasonPreview, total: 0, episodes: [] }),
+      ),
+    );
+    renderSearch(undefined, "episode");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Maria.Holic.CHS.ass");
+    await user.click(screen.getByRole("button", { name: "Replace season" }));
+    await screen.findByRole("button", {
+      name: "Replace season 2 (0 episodes)",
+    });
+    expect(
+      screen.getByRole("button", { name: "Replace season 2 (0 episodes)" }),
+    ).toBeDisabled();
+  });
+
+  it("shows a preview failure without sending a season job", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/providers/episodes", () =>
+        HttpResponse.json({ data: [result] }),
+      ),
+      http.get("/api/providers/episodes/season", () =>
+        HttpResponse.json(
+          { message: "Candidate cache expired" },
+          { status: 404 },
+        ),
+      ),
+    );
+    const { download } = renderSearch(undefined, "episode");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Maria.Holic.CHS.ass");
+    await user.click(screen.getByRole("button", { name: "Replace season" }));
+    await screen.findByText("Season replacement preview");
+    await waitFor(() =>
+      expect(
+        screen.getAllByText("Candidate cache expired").length,
+      ).toBeGreaterThan(0),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Replace season 2 (2 episodes)" }),
+    ).not.toBeInTheDocument();
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("keeps the preview visible when queue submission fails", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/providers/episodes", () =>
+        HttpResponse.json({ data: [result] }),
+      ),
+      http.get("/api/providers/episodes/season", () =>
+        HttpResponse.json(seasonPreview),
+      ),
+      http.post("/api/providers/episodes/season", () =>
+        HttpResponse.json(
+          { message: "Could not queue season replacement" },
+          { status: 500 },
+        ),
+      ),
+    );
+    renderSearch(undefined, "episode");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await screen.findByText("Maria.Holic.CHS.ass");
+    await user.click(screen.getByRole("button", { name: "Replace season" }));
+    await screen.findByRole("button", {
+      name: "Replace season 2 (2 episodes)",
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Replace season 2 (2 episodes)" }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getAllByText("Could not queue season replacement").length,
+      ).toBeGreaterThan(0),
+    );
+    expect(
+      screen.getByRole("button", { name: "Replace season 2 (2 episodes)" }),
+    ).toBeEnabled();
+    expect(
+      screen.queryByText("Season replacement queued"),
     ).not.toBeInTheDocument();
   });
 });

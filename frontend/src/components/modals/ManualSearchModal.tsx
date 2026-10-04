@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Anchor,
@@ -10,6 +10,7 @@ import {
   Divider,
   Group,
   MultiSelect,
+  ScrollArea,
   Stack,
   Text,
   TextInput,
@@ -19,6 +20,7 @@ import {
   faClock,
   faDownload,
   faInfoCircle,
+  faLayerGroup,
   faRotateLeft,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -27,6 +29,8 @@ import { ColumnDef } from "@tanstack/react-table";
 import { isString } from "lodash";
 import {
   useClearProviderRejection,
+  useEpisodeSeasonPreview,
+  useReplaceEpisodeSeasonSubtitles,
   useSystemProviders,
 } from "@/apis/hooks/providers";
 import { ManualSearchOptions } from "@/apis/raw/providers";
@@ -114,6 +118,20 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
   } | null>(null);
   const providerStatus = useSystemProviders();
   const clearRejection = useClearProviderRejection();
+  const previewSeason = useEpisodeSeasonPreview();
+  const replaceSeason = useReplaceEpisodeSeasonSubtitles();
+  const seasonRequestId = useRef(0);
+  const [seasonCandidate, setSeasonCandidate] =
+    useState<SearchResultType | null>(null);
+  const [seasonPreview, setSeasonPreview] =
+    useState<SeasonReplacementPreview | null>(null);
+  const [seasonError, setSeasonError] = useState<string | null>(null);
+  const [seasonQueued, setSeasonQueued] = useState<{
+    jobId: number;
+    season: number;
+    total: number;
+    subtitle: string;
+  } | null>(null);
   const [queuedSubtitle, setQueuedSubtitle] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
   const providerOptions = useMemo(
@@ -140,6 +158,10 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
     if (results.isFetching || (!allProviders && providers.length === 0)) return;
     setQueuedSubtitle("");
     setActionError(null);
+    seasonRequestId.current += 1;
+    setSeasonCandidate(null);
+    setSeasonPreview(null);
+    setSeasonError(null);
     setSubmitted((current) => ({
       options: {
         keyword: keyword.trim() || undefined,
@@ -148,6 +170,80 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
       id: (current?.id ?? 0) + 1,
     }));
   }, [allProviders, keyword, providers, results.isFetching]);
+
+  const showSeasonPreview = useCallback(
+    async (result: SearchResultType) => {
+      if (!("sonarrEpisodeId" in item) || result.provider !== "subhd") return;
+      const requestId = ++seasonRequestId.current;
+      setSeasonCandidate(result);
+      setSeasonPreview(null);
+      setSeasonError(null);
+      try {
+        const preview = await previewSeason.mutateAsync({
+          episodeId: item.sonarrEpisodeId,
+          subtitle: String(result.subtitle),
+        });
+        if (seasonRequestId.current === requestId) setSeasonPreview(preview);
+      } catch (error) {
+        if (seasonRequestId.current === requestId)
+          setSeasonError(
+            error instanceof Error
+              ? error.message
+              : "Could not load season replacement preview.",
+          );
+      }
+    },
+    [item, previewSeason],
+  );
+
+  const cancelSeasonPreview = useCallback(() => {
+    seasonRequestId.current += 1;
+    setSeasonCandidate(null);
+    setSeasonPreview(null);
+    setSeasonError(null);
+  }, []);
+
+  const confirmSeasonReplacement = useCallback(async () => {
+    if (
+      !("sonarrEpisodeId" in item) ||
+      !seasonCandidate ||
+      !seasonPreview ||
+      replaceSeason.isPending
+    )
+      return;
+    setSeasonError(null);
+    try {
+      const queued = await replaceSeason.mutateAsync({
+        episodeId: item.sonarrEpisodeId,
+        form: {
+          subtitle: String(seasonCandidate.subtitle),
+          hi: seasonCandidate.hearing_impaired,
+          forced: seasonCandidate.forced,
+          // eslint-disable-next-line camelcase -- Backend request field.
+          original_format: seasonCandidate.original_format,
+        },
+      });
+      setSeasonQueued({
+        jobId: queued.job_id,
+        season: seasonPreview.season,
+        total: seasonPreview.total,
+        subtitle: String(seasonCandidate.subtitle),
+      });
+      cancelSeasonPreview();
+    } catch (error) {
+      setSeasonError(
+        error instanceof Error
+          ? error.message
+          : "Could not queue season replacement.",
+      );
+    }
+  }, [
+    item,
+    seasonCandidate,
+    seasonPreview,
+    replaceSeason,
+    cancelSeasonPreview,
+  ]);
 
   const ReleaseInfoCell = React.memo(
     ({
@@ -400,6 +496,23 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
                   }}
                 />
               )}
+              {"sonarrEpisodeId" in item && result.provider === "subhd" && (
+                <Action
+                  label="Replace season"
+                  icon={faLayerGroup}
+                  color="gray"
+                  disabled={
+                    previewSeason.isPending ||
+                    replaceSeason.isPending ||
+                    seasonQueued?.subtitle === subtitleId
+                  }
+                  isLoading={
+                    previewSeason.isPending &&
+                    previewSeason.variables?.subtitle === subtitleId
+                  }
+                  onClick={() => void showSeasonPreview(result)}
+                />
+              )}
             </Group>
           );
         },
@@ -413,6 +526,10 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
       queuedSubtitle,
       clearRejection,
       results,
+      previewSeason,
+      replaceSeason,
+      seasonQueued,
+      showSeasonPreview,
     ],
   );
 
@@ -495,6 +612,94 @@ function ManualSearchView<T extends SupportType>(props: Props<T>) {
           data={results.data ?? []}
         ></PageTable>
       </Collapse>
+      {seasonCandidate && (
+        <Alert
+          color={seasonError ? "red" : "yellow"}
+          title="Season replacement preview"
+        >
+          <Stack gap="xs">
+            {previewSeason.isPending && (
+              <Text size="sm">Loading season preview…</Text>
+            )}
+            {seasonError && (
+              <Text size="sm" c="red">
+                {seasonError}
+              </Text>
+            )}
+            {seasonPreview && (
+              <>
+                <Text size="sm">
+                  {seasonPreview.title} — Season {seasonPreview.season}:{" "}
+                  {seasonPreview.total} episodes
+                </Text>
+                <Group gap="xs">
+                  <Text size="sm">Subtitle language:</Text>
+                  <Badge>
+                    <Language.Text
+                      value={{
+                        code2:
+                          seasonPreview.language ?? seasonCandidate.language,
+                        name: "",
+                        hi: seasonCandidate.hearing_impaired === "True",
+                        forced: seasonCandidate.forced === "True",
+                      }}
+                    />
+                  </Badge>
+                </Group>
+                <Text size="sm">
+                  Replaces existing external subtitles in this language after
+                  backing them up. Each episode is validated against its
+                  original audio. Episodes that fail validation keep their
+                  existing subtitles. Other seasons are not changed.
+                </Text>
+                <ScrollArea.Autosize mah={160}>
+                  <Stack gap={2}>
+                    {seasonPreview.episodes.map((episode) => (
+                      <Text size="xs" key={episode.episode_id}>
+                        E{String(episode.episode).padStart(2, "0")} —{" "}
+                        {episode.title} ({episode.existing_subtitles} existing
+                        external subtitles)
+                      </Text>
+                    ))}
+                  </Stack>
+                </ScrollArea.Autosize>
+              </>
+            )}
+            <Group gap="xs" justify="flex-end">
+              <Button
+                variant="default"
+                size="xs"
+                disabled={replaceSeason.isPending}
+                onClick={cancelSeasonPreview}
+              >
+                Cancel
+              </Button>
+              {seasonPreview && (
+                <Button
+                  color="yellow"
+                  size="xs"
+                  loading={replaceSeason.isPending}
+                  disabled={
+                    seasonPreview.total === 0 || previewSeason.isPending
+                  }
+                  onClick={() => void confirmSeasonReplacement()}
+                >
+                  Replace season {seasonPreview.season} ({seasonPreview.total}{" "}
+                  episodes)
+                </Button>
+              )}
+            </Group>
+          </Stack>
+        </Alert>
+      )}
+      {seasonQueued && (
+        <Alert color="gray" title="Season replacement queued">
+          <Text size="sm">
+            Season {seasonQueued.season}: {seasonQueued.total} episodes queued
+            as job #{seasonQueued.jobId}. Follow progress in Jobs Manager.
+          </Text>
+        </Alert>
+      )}
       <Divider></Divider>
       <Button
         loading={results.isFetching}

@@ -3,6 +3,8 @@ import six
 import json
 import re
 import os
+import stat
+import uuid
 import logging
 import datetime
 import socket
@@ -1216,6 +1218,28 @@ def get_subtitle_path(video_path, language=None, extension='.srt', forced_tag=Fa
     return subtitle_root + extension
 
 
+def _atomic_write_subtitle(path, content, chmod=None):
+    """Keep the existing subtitle intact until a complete replacement is ready."""
+    if os.path.islink(path):
+        raise OSError('Refusing to replace a subtitle symlink')
+    mode = chmod
+    if mode is None and os.path.exists(path):
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+    temporary = os.path.join(os.path.dirname(path), '.bazarr-subtitle-%s.tmp' % uuid.uuid4().hex)
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+        with os.fdopen(descriptor, 'wb') as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        if mode is not None:
+            os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def save_subtitles(file_path, subtitles, single=False, directory=None, chmod=None, formats=("srt",),
                    tags=None, path_decoder=None, debug_mods=False):
     """Save subtitles on filesystem.
@@ -1279,6 +1303,7 @@ def save_subtitles(file_path, subtitles, single=False, directory=None, chmod=Non
 
         subtitle.storage_path = subtitle_path
 
+        written = False
         for format in formats:
             if format != "srt":
                 subtitle_path = os.path.splitext(subtitle_path)[0] + (u".%s" % format)
@@ -1286,20 +1311,14 @@ def save_subtitles(file_path, subtitles, single=False, directory=None, chmod=Non
             logger.debug(u"Saving %r to %r", subtitle, subtitle_path)
             content = subtitle.get_modified_content(format=format, debug=debug_mods)
             if content:
-                if os.path.exists(subtitle_path):
-                    os.remove(subtitle_path)
-
-                with open(subtitle_path, 'wb') as f:
-                    f.write(content)
+                _atomic_write_subtitle(subtitle_path, content, chmod=chmod)
                 subtitle.storage_path = subtitle_path
+                written = True
             else:
                 logger.error(u"Something went wrong when getting modified subtitle for %s", subtitle)
 
-        # change chmod if requested
-        if chmod:
-            os.chmod(subtitle_path, chmod)
-
-        saved_subtitles.append(subtitle)
+        if written:
+            saved_subtitles.append(subtitle)
 
         # check single
         if single:

@@ -8,6 +8,7 @@ from app.database import TableEpisodes, TableShows, database, select, get_subtit
 from utilities.path_mappings import path_mappings
 from app.get_providers import get_providers
 from subtitles.manual import manual_search, episode_manually_download_specific_subtitle, validate_manual_search_options, clear_manual_rejection
+from subtitles.season import SeasonRequestError, preview_season, enqueue_season
 from app.config import settings
 from app.jobs_queue import jobs_queue
 from subtitles.indexer.series import store_subtitles, list_missing_subtitles
@@ -147,3 +148,46 @@ class ProviderEpisodes(Resource):
         """Allow retrying this rejected candidate without starting a download."""
         args = self.delete_request_parser.parse_args()
         return clear_manual_rejection('series', args.get('episodeid'), args.get('subtitle'))
+
+
+@api_ns_providers_episodes.route('providers/episodes/season')
+class ProviderEpisodesSeason(Resource):
+    get_request_parser = reqparse.RequestParser()
+    get_request_parser.add_argument('episodeid', type=int, location='args', required=True, help='Current episode ID')
+    get_request_parser.add_argument('subtitle', type=str, location='args', required=True, help='Candidate cache UUID')
+
+    @authenticate
+    @api_ns_providers_episodes.doc(parser=get_request_parser)
+    @api_ns_providers_episodes.response(200, 'Preview current season replacement')
+    @api_ns_providers_episodes.response(400, 'Invalid candidate')
+    @api_ns_providers_episodes.response(404, 'Episode or candidate not found')
+    def get(self):
+        """Preview local episodes in the current episode's season without downloading or saving."""
+        args = self.get_request_parser.parse_args()
+        try:
+            return preview_season(args['episodeid'], args['subtitle']), 200
+        except SeasonRequestError as error:
+            return {'message': str(error)}, error.status
+
+    post_request_parser = reqparse.RequestParser()
+    post_request_parser.add_argument('episodeid', type=int, location='form', required=True, help='Current episode ID')
+    post_request_parser.add_argument('subtitle', type=str, location='form', required=True, help='Candidate cache UUID')
+    for flag in ('hi', 'forced', 'original_format'):
+        post_request_parser.add_argument(flag, type=lambda value: value.capitalize(), choices=('True', 'False'),
+                                         location='form', required=True, help='Must be True or False')
+
+    @authenticate
+    @api_ns_providers_episodes.doc(parser=post_request_parser)
+    @api_ns_providers_episodes.response(202, 'Season replacement queued')
+    @api_ns_providers_episodes.response(400, 'Invalid candidate or options')
+    @api_ns_providers_episodes.response(404, 'Episode or candidate not found')
+    @api_ns_providers_episodes.response(409, 'A replacement for this season is already queued or running')
+    def post(self):
+        """Queue the previewed season; scope is always resolved by the server."""
+        args = self.post_request_parser.parse_args()
+        try:
+            job_id = enqueue_season(args['episodeid'], args['subtitle'], args['hi'], args['forced'],
+                                    args['original_format'])
+            return {'job_id': job_id}, 202
+        except SeasonRequestError as error:
+            return {'message': str(error)}, error.status

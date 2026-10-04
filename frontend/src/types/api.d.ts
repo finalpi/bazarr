@@ -401,6 +401,25 @@ interface SearchResultType {
   original_format: PythonBoolean;
 }
 
+interface SeasonReplacementPreview {
+  series_id: number;
+  season: number;
+  title: string;
+  total: number;
+  language?: string;
+  provider?: "subhd";
+  episodes: {
+    episode_id: number;
+    episode: number;
+    title: string;
+    existing_subtitles: number;
+  }[];
+}
+
+interface SeasonReplacementQueued {
+  job_id: number;
+}
+
 interface ReleaseInfo {
   current: boolean;
   date: string;

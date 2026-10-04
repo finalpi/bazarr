@@ -69,6 +69,27 @@ class ProviderApi extends BaseApi {
   async clearEpisodeRejection(episodeid: number, subtitle: string) {
     await this.delete("/episodes", { episodeid, subtitle });
   }
+
+  async previewEpisodeSeasonReplacement(episodeid: number, subtitle: string) {
+    return this.get<SeasonReplacementPreview>("/episodes/season", {
+      episodeid,
+      subtitle,
+    });
+  }
+
+  async replaceEpisodeSeasonSubtitles(
+    episodeid: number,
+    form: Pick<
+      FormType.ManualDownload,
+      "subtitle" | "hi" | "forced" | "original_format"
+    >,
+  ) {
+    const response = await this.post<SeasonReplacementQueued>(
+      "/episodes/season",
+      { episodeid, ...form },
+    );
+    return response.data;
+  }
 }
 
 const providerApi = new ProviderApi();

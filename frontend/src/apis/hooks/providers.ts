@@ -96,6 +96,31 @@ export function useClearProviderRejection() {
   });
 }
 
+export function useEpisodeSeasonPreview() {
+  return useMutation({
+    mutationKey: [QueryKeys.System, QueryKeys.Providers, "season-preview"],
+    mutationFn: (param: { episodeId: number; subtitle: string }) =>
+      api.providers.previewEpisodeSeasonReplacement(
+        param.episodeId,
+        param.subtitle,
+      ),
+  });
+}
+
+export function useReplaceEpisodeSeasonSubtitles() {
+  return useMutation({
+    mutationKey: [QueryKeys.System, QueryKeys.Providers, "season-replacement"],
+    mutationFn: (param: {
+      episodeId: number;
+      form: Pick<
+        FormType.ManualDownload,
+        "subtitle" | "hi" | "forced" | "original_format"
+      >;
+    }) =>
+      api.providers.replaceEpisodeSeasonSubtitles(param.episodeId, param.form),
+  });
+}
+
 export function useDownloadEpisodeSubtitles() {
   const client = useQueryClient();
 
