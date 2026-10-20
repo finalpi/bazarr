@@ -453,6 +453,8 @@ def test_chinese_target_rejects_english_sentences_but_allows_names():
     assert validate("I can't believe Quimby banned Halloween", 'zho')
     assert validate('No candy no pranks 8:00 curfew', 'zho')
     assert not validate('Homer Simpson', 'zho')
+    assert not validate('Blue-Haired Lawyer,', 'zho')
+    assert validate('Blue-haired lawyers are here', 'zho')
     assert not validate('Quimby 禁止了万圣节', 'zho')
     assert not validate('This is English', 'spa')
 

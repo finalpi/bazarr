@@ -65,6 +65,9 @@ def _untranslated_sentence(text, to_lang):
     """Reject Latin sentences left in a Chinese target, allowing isolated names."""
     if to_lang not in {'zho', 'zht'} or re.search(r'[\u3400-\u9fff]', text):
         return False
+    # Hyphenated character names such as Blue-Haired Lawyer are not dialogue.
+    if '-' in text and re.fullmatch(r'[A-Z][a-z]+(?:-[A-Z][a-z]+)+(?: [A-Z][a-z]+){0,2}[,]?', text.strip()):
+        return False
     return len(re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", text)) >= 3
 
 
