@@ -187,7 +187,7 @@ def apply_ass_style(subtitles, bilingual=False):
     return subtitles
 
 
-def _extract_numbered(content, target_ids, allow_partial=False):
+def _extract_numbered(content, target_ids, allow_partial=False, context_ids=()):
     content = content.strip()
     if content.startswith('```'):
         content = re.sub(r'^```(?:text)?\s*|\s*```$', '', content, flags=re.I | re.S)
@@ -207,6 +207,14 @@ def _extract_numbered(content, target_ids, allow_partial=False):
     indices = [item[0] for item in items]
     if set(indices) == requested and len(indices) == len(target_ids):
         return dict(items)
+    # A model may translate context despite being instructed not to. Keep only
+    # exact requested IDs when every extra ID belongs to the supplied context.
+    # Never infer relative numbering from this mixed response.
+    extras = seen - requested
+    if extras and extras <= (set(context_ids) - requested) and seen & requested:
+        selected = {index: text for index, text in items if index in requested}
+        if allow_partial or set(selected) == requested:
+            return selected
     relative = list(range(len(target_ids)))
     one_based = list(range(1, len(target_ids) + 1))
     shifted = [index + 1 for index in target_ids]
@@ -222,10 +230,10 @@ def _extract_numbered(content, target_ids, allow_partial=False):
                      '(missing=%s, unexpected=%s)' % (missing, unexpected))
 
 
-def _numbered(items, include_translation=False):
+def _numbered(items, include_translation=False, numbered=True):
     lines = []
     for item in items:
-        line = '[%d] %s' % (item['index'], item['content'])
+        line = '[%d] %s' % (item['index'], item['content']) if numbered else 'Source: ' + item['content']
         if include_translation and item.get('translation'):
             line += ' => ' + item['translation']
         lines.append(line)
@@ -318,11 +326,13 @@ class OpenAICompatibleTranslatorService:
                 '12. Output numbered translations only, without Markdown, explanations or source text.\n\n'
                 '%s\n'
                 'Media context:\n%s\n\n'
-                'Surrounding context (understand only; do not output these numbers):\n%s\n\n'
+                'Surrounding context (understand only; never output these cues):\n%s\n\n'
+                'Return ONLY these requested indices: %s\n'
                 'Subtitles to translate:\n%s'
             ) % (source_language, target_language, name_instruction, punctuation_instruction,
                  hi_instruction,
-                 description or '(none)', _numbered(surrounding, include_translation=True),
+                 description or '(none)', _numbered(surrounding, include_translation=True, numbered=False),
+                 ', '.join(str(index) for index in target_ids),
                  _numbered(targets))
         payload = {
             'model': profile['model'],
@@ -340,7 +350,8 @@ class OpenAICompatibleTranslatorService:
         response.raise_for_status()
         body = response.json()
         choice = body['choices'][0]
-        result = _extract_numbered(choice['message']['content'], target_ids, allow_partial=True)
+        result = _extract_numbered(choice['message']['content'], target_ids, allow_partial=True,
+                                   context_ids=[item['index'] for item in surrounding])
         missing_ids = target_set - set(result)
         invalid_ids = set(missing_ids)
         for target in targets:

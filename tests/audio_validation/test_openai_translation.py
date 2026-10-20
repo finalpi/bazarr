@@ -446,6 +446,35 @@ def test_incomplete_numbered_output_only_retains_exact_ids():
     assert parse('', [20, 21], allow_partial=True) == {}
 
 
+def test_numbered_context_extras_preserve_exact_targets_without_remapping():
+    parse = load_translation_namespace(translator_settings())['_extract_numbered']
+    assert parse('[19] Context\n[20] First\n[21] Second\n[22] Context',
+                 [20, 21], context_ids=[19, 22]) == {20: 'First', 21: 'Second'}
+    assert parse('[19] Context\n[21] Second', [20, 21], allow_partial=True,
+                 context_ids=[19, 22]) == {21: 'Second'}
+    with pytest.raises(ValueError, match='unexpected='):
+        parse('[20] First\n[21] Second\n[99] Unknown', [20, 21], context_ids=[19, 22])
+    with pytest.raises(ValueError, match='duplicate'):
+        parse('[19] Context\n[20] First\n[20] Again', [20, 21], context_ids=[19])
+
+
+def test_request_context_has_no_output_numbers_and_extra_context_is_ignored():
+    ns = load_translation_namespace(translator_settings())
+    calls = []
+    def post(*args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {
+            'choices': [{'message': {'content': '[19] 上文\n[20] 你好\n[21] 下文'}}]})
+    ns['requests'] = SimpleNamespace(post=post, RequestException=Exception)
+    service = make_service(ns, 'source.srt', 'translated.srt')
+    targets = [{'index': 20, 'content': 'Hello'}]
+    context = [{'index': 19, 'content': 'Before'}, *targets, {'index': 21, 'content': 'After'}]
+    assert service._request(targets, context, '') == {20: '你好'}
+    prompt = calls[0]['json']['messages'][0]['content']
+    assert '[19]' not in prompt and '[21]' not in prompt
+    assert 'Source: Before' in prompt and 'Source: After' in prompt
+
+
 def test_english_output_does_not_trigger_language_or_name_review():
     ns = load_translation_namespace(translator_settings())
     calls = []
