@@ -187,7 +187,7 @@ def apply_ass_style(subtitles, bilingual=False):
     return subtitles
 
 
-def _extract_numbered(content, target_ids):
+def _extract_numbered(content, target_ids, allow_partial=False):
     content = content.strip()
     if content.startswith('```'):
         content = re.sub(r'^```(?:text)?\s*|\s*```$', '', content, flags=re.I | re.S)
@@ -212,7 +212,14 @@ def _extract_numbered(content, target_ids):
     shifted = [index + 1 for index in target_ids]
     if len(items) == len(target_ids) and indices in (relative, one_based, shifted):
         return {target: item[1] for target, item in zip(target_ids, items)}
-    raise ValueError('Model did not return every requested subtitle index')
+    # Only exact absolute IDs can be retained from incomplete output. Partial
+    # relative numbering cannot be mapped safely when an intermediate cue is missing.
+    if allow_partial and seen <= requested:
+        return dict(items)
+    missing = sorted(requested - seen)
+    unexpected = sorted(seen - requested)
+    raise ValueError('Model did not return every requested subtitle index '
+                     '(missing=%s, unexpected=%s)' % (missing, unexpected))
 
 
 def _numbered(items, include_translation=False):
@@ -329,10 +336,14 @@ class OpenAICompatibleTranslatorService:
                                  headers=headers, timeout=int(settings.translator.openai_timeout))
         response.raise_for_status()
         body = response.json()
-        result = _extract_numbered(body['choices'][0]['message']['content'], target_ids)
-        invalid_ids = set()
+        choice = body['choices'][0]
+        result = _extract_numbered(choice['message']['content'], target_ids, allow_partial=True)
+        missing_ids = target_set - set(result)
+        invalid_ids = set(missing_ids)
         for target in targets:
             index = target['index']
+            if index not in result:
+                continue
             if self.remove_hearing_impaired and result[index] == OMIT_HI_CUE:
                 continue
             result[index] = normalize_translation(result[index], self.to_lang)
@@ -343,8 +354,10 @@ class OpenAICompatibleTranslatorService:
         if invalid_ids:
             partial_result = {index: text for index, text in result.items() if index not in invalid_ids}
             raise TranslationConstraintError(
-                'Model output violated dual-speaker constraints for subtitles %s' %
-                ', '.join(str(index) for index in sorted(invalid_ids)),
+                'Model output missing indices or violated dual-speaker constraints: missing=%s, speaker_invalid=%s, '
+                'finish_reason=%s, returned=%d/%d' % (
+                    sorted(missing_ids), sorted(invalid_ids - missing_ids),
+                    choice.get('finish_reason', 'unknown'), len(result), len(target_ids)),
                 partial_result, invalid_ids)
         return result
 
@@ -354,20 +367,27 @@ class OpenAICompatibleTranslatorService:
         pending = list(targets)
         working_context = [dict(item) for item in context]
         for attempt in range(3):
-            try:
-                translated.update(self._request(pending, working_context, description))
-                return translated
-            except TranslationConstraintError as exc:
-                error = exc
-                translated.update(exc.partial_result)
-                pending = [item for item in pending if item['index'] in exc.invalid_ids]
+            # Each recovery round uses smaller requests, but retains the scene
+            # context and all previously accepted translations.
+            chunk_size = max(1, len(targets) // (2 ** attempt))
+            for start in range(0, len(pending), chunk_size):
+                chunk = pending[start:start + chunk_size]
+                try:
+                    translated.update(self._request(chunk, working_context, description))
+                except TranslationConstraintError as exc:
+                    error = exc
+                    translated.update(exc.partial_result)
+                    logger.warning('Translation recovery round %d/3: %s', attempt + 1, exc)
+                except (requests.RequestException, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+                    error = exc
+                    logger.warning('Translation request failed in round %d/3: %s',
+                                   attempt + 1, type(exc).__name__)
                 for item in working_context:
                     if item['index'] in translated:
                         item['translation'] = translated[item['index']]
-                logger.warning('Retrying only constrained subtitle cues %s (attempt %d/3)',
-                               sorted(exc.invalid_ids), attempt + 1)
-            except (requests.RequestException, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
-                error = exc
+            pending = [item for item in targets if item['index'] not in translated]
+            if not pending:
+                return translated
             if attempt < 2:
                 time.sleep(2 ** attempt)
         raise RuntimeError(f'OpenAI-compatible translation failed after 3 attempts: {error}') from error

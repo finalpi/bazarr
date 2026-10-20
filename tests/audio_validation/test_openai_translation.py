@@ -434,6 +434,70 @@ def test_constraint_retry_only_resubmits_invalid_lines():
     assert calls == [[0, 1], [1]]
 
 
+def test_incomplete_numbered_output_only_retains_exact_ids():
+    ns = load_translation_namespace(translator_settings())
+    parse = ns['_extract_numbered']
+    assert parse('[20] First\n[22] Third', [20, 21, 22], allow_partial=True) == {
+        20: 'First', 22: 'Third'}
+    with pytest.raises(ValueError, match='missing='):
+        parse('[1] First\n[3] Third', [20, 21, 22], allow_partial=True)
+    with pytest.raises(ValueError, match='duplicate'):
+        parse('[20] First\n[20] Other', [20, 21], allow_partial=True)
+    assert parse('', [20, 21], allow_partial=True) == {}
+
+
+def test_missing_index_recovery_preserves_valid_cues_and_context():
+    ns = load_translation_namespace(translator_settings())
+    service = make_service(ns, 'source.srt', 'translated.srt')
+    calls = []
+
+    def request(targets, context, description):
+        calls.append([t['index'] for t in targets])
+        if len(calls) == 1:
+            raise ns['TranslationConstraintError']('missing=[21]', {20: 'first', 22: 'third'}, {21})
+        assert next(t for t in context if t['index'] == 20)['translation'] == 'first'
+        return {21: 'second'}
+
+    service._request = request
+    targets = [{'index': i, 'content': str(i)} for i in (20, 21, 22)]
+    assert service._translate_batch(targets, [dict(t) for t in targets], '') == {
+        20: 'first', 21: 'second', 22: 'third'}
+    assert calls == [[20, 21, 22], [21]]
+
+
+def test_request_partial_response_keeps_only_valid_normalized_lines():
+    ns = load_translation_namespace(translator_settings())
+    ns['requests'] = SimpleNamespace(post=lambda *a, **k: SimpleNamespace(
+        raise_for_status=lambda: None,
+        json=lambda: {'choices': [{'finish_reason': 'length', 'message': {
+            'content': '[20] Hello，friend。\n[22] One speaker'}}]}))
+    service = make_service(ns, 'source.srt', 'translated.srt')
+    targets = [{'index': 20, 'content': 'Hello'}, {'index': 21, 'content': 'Missing'},
+               {'index': 22, 'content': '-Hello -Bye'}]
+    with pytest.raises(ns['TranslationConstraintError'], match='finish_reason=length') as err:
+        service._request(targets, targets, '')
+    assert err.value.partial_result == {20: 'Hello friend'}
+    assert err.value.invalid_ids == {21, 22}
+
+
+def test_malformed_batch_recovery_reduces_request_size(monkeypatch):
+    ns = load_translation_namespace(translator_settings())
+    monkeypatch.setattr(ns['time'], 'sleep', lambda _: None)
+    service = make_service(ns, 'source.srt', 'translated.srt')
+    calls = []
+
+    def request(targets, *args):
+        calls.append(len(targets))
+        if len(targets) > 1:
+            raise ValueError('bad numbering')
+        return {t['index']: 'ok' for t in targets}
+
+    service._request = request
+    targets = [{'index': i, 'content': str(i)} for i in range(4)]
+    assert service._translate_batch(targets, targets, '') == dict.fromkeys(range(4), 'ok')
+    assert calls == [4, 2, 2, 1, 1, 1, 1]
+
+
 def processing_function(name, namespace):
     source = ROOT / 'bazarr/subtitles/processing.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
