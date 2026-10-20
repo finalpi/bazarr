@@ -61,6 +61,13 @@ def _is_dual_speaker(text):
     return _speaker_marker_count(text) >= 2
 
 
+def _untranslated_sentence(text, to_lang):
+    """Reject Latin sentences left in a Chinese target, allowing isolated names."""
+    if to_lang not in {'zho', 'zht'} or re.search(r'[\u3400-\u9fff]', text):
+        return False
+    return len(re.findall(r"[A-Za-z]+(?:['’][A-Za-z]+)?", text)) >= 3
+
+
 def load_subtitles_with_encoding(path):
     try:
         return pysubs2.load(path, encoding='utf-8')
@@ -263,6 +270,8 @@ class OpenAICompatibleTranslatorService:
             name_instruction = (
                 '3. Keep personal names, character names, nicknames and speaker labels in their '
                 'recognizable original Latin spelling. Do not translate or transliterate them.'
+                ' This applies ONLY to names, never to the surrounding dialogue; '
+                'translate all other words into the target language.'
             )
         else:
             name_instruction = (
@@ -340,6 +349,8 @@ class OpenAICompatibleTranslatorService:
         result = _extract_numbered(choice['message']['content'], target_ids, allow_partial=True)
         missing_ids = target_set - set(result)
         invalid_ids = set(missing_ids)
+        untranslated_ids = set()
+        speaker_invalid_ids = set()
         for target in targets:
             index = target['index']
             if index not in result:
@@ -347,16 +358,21 @@ class OpenAICompatibleTranslatorService:
             if self.remove_hearing_impaired and result[index] == OMIT_HI_CUE:
                 continue
             result[index] = normalize_translation(result[index], self.to_lang)
+            if _untranslated_sentence(result[index], self.to_lang):
+                untranslated_ids.add(index)
+                invalid_ids.add(index)
             if (_is_dual_speaker(target['content']) and
                     (_speaker_marker_count(result[index]) < 2 or
                      '<br' in result[index].lower())):
                 invalid_ids.add(index)
+                speaker_invalid_ids.add(index)
         if invalid_ids:
             partial_result = {index: text for index, text in result.items() if index not in invalid_ids}
             raise TranslationConstraintError(
                 'Model output missing indices or violated dual-speaker constraints: missing=%s, speaker_invalid=%s, '
+                'untranslated=%s, '
                 'finish_reason=%s, returned=%d/%d' % (
-                    sorted(missing_ids), sorted(invalid_ids - missing_ids),
+                    sorted(missing_ids), sorted(speaker_invalid_ids), sorted(untranslated_ids),
                     choice.get('finish_reason', 'unknown'), len(result), len(target_ids)),
                 partial_result, invalid_ids)
         return result

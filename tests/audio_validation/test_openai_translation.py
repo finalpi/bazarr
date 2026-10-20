@@ -21,7 +21,7 @@ def load_translation_namespace(settings):
     source = ROOT / 'bazarr/subtitles/tools/translate/services/openai_translator.py'
     tree = ast.parse(source.read_text(encoding='utf-8'))
     wanted = {'TranslationConstraintError', '_plain', 'normalize_translation', '_display_width', '_word_char',
-              '_speaker_marker_count', '_is_dual_speaker',
+              '_speaker_marker_count', '_is_dual_speaker', '_untranslated_sentence',
               'load_subtitles_with_encoding', 'wrap_translation', '_ass_color', '_ass_style',
               'apply_ass_style', '_extract_numbered', '_numbered',
               'OpenAICompatibleTranslatorService'}
@@ -288,7 +288,8 @@ def test_hearing_impaired_prompt_omits_only_non_dialogue_cues(tmp_path):
                {'index': 1, 'content': '[LAUGHS] Run!'},
                {'index': 2, 'content': 'OH, BABY, YOU'}]
 
-    service._request(targets, targets, '')
+    with pytest.raises(namespace['TranslationConstraintError'], match='untranslated='):
+        service._request(targets, targets, '')
     assert 'Keep and translate sung lyrics' not in captured['json']['messages'][0]['content']
     service.remove_hearing_impaired = True
     assert service._request(targets, targets, '') == {
@@ -444,6 +445,31 @@ def test_incomplete_numbered_output_only_retains_exact_ids():
     with pytest.raises(ValueError, match='duplicate'):
         parse('[20] First\n[20] Other', [20, 21], allow_partial=True)
     assert parse('', [20, 21], allow_partial=True) == {}
+
+
+def test_chinese_target_rejects_english_sentences_but_allows_names():
+    ns = load_translation_namespace(translator_settings())
+    validate = ns['_untranslated_sentence']
+    assert validate("I can't believe Quimby banned Halloween", 'zho')
+    assert validate('No candy no pranks 8:00 curfew', 'zho')
+    assert not validate('Homer Simpson', 'zho')
+    assert not validate('Quimby 禁止了万圣节', 'zho')
+    assert not validate('This is English', 'spa')
+
+
+def test_request_recovers_english_left_in_chinese_target():
+    ns = load_translation_namespace(translator_settings())
+    ns['requests'] = SimpleNamespace(post=lambda *a, **k: SimpleNamespace(
+        raise_for_status=lambda: None,
+        json=lambda: {'choices': [{'finish_reason': 'stop', 'message': {
+            'content': '[20] Marge 我要去 Moe 的酒吧\n[21] Nice costume you have'}}]}))
+    service = make_service(ns, 'source.srt', 'translated.srt')
+    targets = [{'index': 20, 'content': "Marge I am going to Moe's"},
+               {'index': 21, 'content': 'Nice costume you have'}]
+    with pytest.raises(ns['TranslationConstraintError'], match=r'untranslated=\[21\]') as err:
+        service._request(targets, targets, '')
+    assert err.value.partial_result == {20: 'Marge 我要去 Moe 的酒吧'}
+    assert err.value.invalid_ids == {21}
 
 
 def test_missing_index_recovery_preserves_valid_cues_and_context():
