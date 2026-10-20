@@ -262,6 +262,7 @@ class OpenAICompatibleTranslatorService:
         if str(self.from_lang).lower() in {'en', 'eng'}:
             name_instruction = (
                 '3. Keep actual personal names in their recognizable original Latin spelling. '
+                'Do not translate or transliterate them. '
                 'Translate descriptive role labels and occupations into the target language. '
                 'Translate all surrounding dialogue; preserving a name does not mean copying '
                 'the whole sentence unchanged.'

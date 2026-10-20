@@ -446,6 +446,20 @@ def test_incomplete_numbered_output_only_retains_exact_ids():
     assert parse('', [20, 21], allow_partial=True) == {}
 
 
+def test_english_output_does_not_trigger_language_or_name_review():
+    ns = load_translation_namespace(translator_settings())
+    calls = []
+    def post(*args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(raise_for_status=lambda: None,
+            json=lambda: {'choices': [{'message': {'content': '[20] Marge\n[21] Blue-Haired Lawyer'}}]})
+    ns['requests'] = SimpleNamespace(post=post, RequestException=Exception)
+    service = make_service(ns, 'source.srt', 'translated.srt')
+    targets = [{'index': 20, 'content': 'Marge'}, {'index': 21, 'content': 'Blue-Haired Lawyer'}]
+    assert service._translate_batch(targets, targets, '') == {20: 'Marge', 21: 'Blue-Haired Lawyer'}
+    assert len(calls) == 1
+
+
 def test_missing_index_recovery_preserves_valid_cues_and_context():
     ns = load_translation_namespace(translator_settings())
     service = make_service(ns, 'source.srt', 'translated.srt')
